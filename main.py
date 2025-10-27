@@ -52,7 +52,7 @@ def main(credentials_file: str | Path | None = None) -> None:
         if not uid:
             continue
 
-        profile = client.fetch_user_profile(uid)
+        profile = client.fetch_user_profile(uid, request.headers)
         print(profile.status_code)
         print(profile.body)
 

@@ -26,8 +26,6 @@ DEFAULT_HEADERS: Mapping[str, str] = {
     "Sec-Fetch-Dest": "empty",
     "Referer": "https://consignadorapido.com/",
     "Priority": "u=1, i",
-    # If you prefer, remove Cookie here and use session.cookies.set(...) below
-    "Cookie": "PHPSESSID=k245sqdgimv74mqncu4pk12mf5",
 }
 
 DEFAULT_CREDENTIALS: Mapping[str, str] = {
@@ -37,22 +35,15 @@ DEFAULT_CREDENTIALS: Mapping[str, str] = {
 
 PROFILE_URL_TEMPLATE = "https://consignadorapido.com/usuario/perfil_usuario/{uid}"
 
-PROFILE_HEADERS: Mapping[str, str] = {
-    "Host": "consignadorapido.com",
-    "sec-ch-ua": '"Brave";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Linux"',
-    "upgrade-insecure-requests": "1",
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+PROFILE_HEADER_UPDATES: Mapping[str, str] = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "sec-gpc": "1",
-    "Accept-Language": "pt-BR,pt;q=0.9",
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-User": "?1",
-    "Sec-Fetch-Dest": "document",
     "Referer": "https://consignadorapido.com/usuario/home",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
     "Priority": "u=0, i",
+    "upgrade-insecure-requests": "1",
 }
 
 DEFAULT_CREDENTIALS_FILE = Path(__file__).resolve().parent.parent / "credentials.txt"
@@ -67,7 +58,7 @@ __all__ = [
     "DEFAULT_URL",
     "DEFAULT_HEADERS",
     "DEFAULT_CREDENTIALS",
-    "PROFILE_HEADERS",
+    "PROFILE_HEADER_UPDATES",
     "PROFILE_URL_TEMPLATE",
     "DEFAULT_CREDENTIALS_FILE",
     "DEFAULT_LOGIN_REQUEST",
