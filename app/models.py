@@ -37,3 +37,12 @@ class LoginResponse:
     status_code: int
     body: Dict[str, object] | str
 
+
+@dataclass(frozen=True)
+class ServiceRequest:
+    """Definition of an authenticated request performed after login."""
+
+    url: str
+    headers: Mapping[str, str]
+    payload: Mapping[str, str] | str
+
