@@ -60,7 +60,7 @@ OFFLINE_HEADERS: Mapping[str, str] = {
     "Priority": "u=1, i",
 }
 
-OFFLINE_PAYLOAD = "higienizar=0&sistema=offline&selectBC=beneficio&busca=texte_exemplo+&nascimento=&valor_desejado="
+OFFLINE_PAYLOAD = "higienizar=0&sistema=offline&selectBC=cpf&busca=texte_exemplo+&nascimento=&valor_desejado="
 
 DEFAULT_OFFLINE_REQUEST = ServiceRequest(
     url=OFFLINE_URL,
