@@ -160,7 +160,7 @@ _VALUE_ATTRIBUTE_PATTERN = re.compile(
 
 def _extract_hidden_inputs(response_body: Mapping[str, object] | str) -> dict[str, str]:
     """Return hidden input fields mapped as name/value pairs from an HTML response."""
-
+    response_body =  response_body['html']
     if not isinstance(response_body, str):
         return {}
 
