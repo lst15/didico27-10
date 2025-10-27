@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import parse_qsl, urlencode
@@ -38,7 +40,8 @@ def main() -> None:
         benefit_response = client.perform_authenticated(benefit_request)
         print(f"Requisição por benefício realizada com NB: {nb_identifier}")
         print(benefit_response.status_code)
-        print(benefit_response.body)
+        hidden_inputs = _extract_hidden_input_values(benefit_response.body)
+        print(json.dumps(hidden_inputs, ensure_ascii=False))
 
 
 def _load_search_values(path: Path) -> Iterable[str]:
@@ -142,6 +145,47 @@ def _extract_nb_identifier(response_body: Mapping[str, object] | str) -> str | N
         return None
 
     return candidate.split()[0]
+
+
+def _extract_hidden_input_values(
+    response_body: Mapping[str, object] | str,
+) -> dict[str, str]:
+    """Collect hidden input fields from an HTML response body."""
+
+    if not isinstance(response_body, str):
+        return {}
+
+    parser = _HiddenInputParser()
+    parser.feed(response_body)
+    parser.close()
+    return parser.hidden_inputs
+
+
+class _HiddenInputParser(HTMLParser):
+    """Parse HTML and extract hidden input fields."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.hidden_inputs: dict[str, str] = {}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "input":
+            return
+
+        normalized_attrs = {
+            (name.lower() if name else name): value for name, value in attrs
+        }
+
+        input_type = normalized_attrs.get("type")
+        if not isinstance(input_type, str) or input_type.lower() != "hidden":
+            return
+
+        name_attr = normalized_attrs.get("name")
+        value_attr = normalized_attrs.get("value")
+        if not isinstance(name_attr, str) or not isinstance(value_attr, str):
+            return
+
+        self.hidden_inputs[name_attr] = value_attr
 
 
 if __name__ == "__main__":
