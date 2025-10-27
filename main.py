@@ -33,18 +33,19 @@ from app import (
 
 
 class _ProfileInputParser(HTMLParser):
-    """Extract text input values keyed by their ``id`` attributes."""
+    """Extract text-like input values keyed by their ``id`` attributes."""
 
     def __init__(self) -> None:
         super().__init__()
         self.fields: dict[str, str] = {}
+        self._allowed_types = {"text", "email", "int"}
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:  # type: ignore[override]
         if tag.lower() != "input":
             return
 
         attributes = {key: (value or "") for key, value in attrs}
-        if attributes.get("type", "").lower() != "text":
+        if attributes.get("type", "").lower() not in self._allowed_types:
             return
 
         field_id = attributes.get("id", "")
