@@ -10,6 +10,16 @@ from pathlib import Path
 
 OUTPUT_DIRECTORY = Path(__file__).resolve().parent / "saida"
 OUTPUT_FILE = OUTPUT_DIRECTORY / "dados.csv"
+CSV_FIELD_ORDER = [
+    "nome",
+    "cpf_cnpj",
+    "telefone",
+    "cidade",
+    "logradouro",
+    "numero",
+    "uf",
+    "cep",
+]
 
 
 def _extract_uid(body: Mapping[str, object] | str) -> str | None:
@@ -76,18 +86,15 @@ def _write_successful_records(records: list[Mapping[str, str]]) -> None:
 
     OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
-    all_fields: set[str] = set()
-    for record in records:
-        all_fields.update(record.keys())
-
-    preferred_order = ["login", "uid_usuario"]
-    remaining_fields = sorted(field for field in all_fields if field not in preferred_order)
-    fieldnames = [field for field in preferred_order if field in all_fields] + remaining_fields
+    filtered_records = [
+        {field: record.get(field, "") for field in CSV_FIELD_ORDER}
+        for record in records
+    ]
 
     with OUTPUT_FILE.open("w", encoding="utf-8", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer = csv.DictWriter(csv_file, fieldnames=CSV_FIELD_ORDER)
         writer.writeheader()
-        writer.writerows(records)
+        writer.writerows(filtered_records)
 
 
 def main(credentials_file: str | Path | None = None) -> None:
@@ -121,8 +128,7 @@ def main(credentials_file: str | Path | None = None) -> None:
         if fields:
             print(json.dumps(fields, ensure_ascii=False))
 
-            record: dict[str, str] = {"login": str(login), "uid_usuario": uid}
-            record.update({key: str(value) for key, value in fields.items()})
+            record = {key: str(value) for key, value in fields.items()}
             successful_records.append(record)
         else:
             print(profile.body)
