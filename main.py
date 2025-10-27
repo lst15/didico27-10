@@ -148,9 +148,15 @@ def _extract_nb_identifier(response_body: Mapping[str, object] | str) -> str | N
 
 
 def _extract_hidden_input_values(
-    response_body: Mapping[str, object] | str,
+    response_body: Mapping[str, object] | str | bytes,
 ) -> dict[str, str]:
     """Collect hidden input fields from an HTML response body."""
+
+    if isinstance(response_body, bytes):
+        try:
+            response_body = response_body.decode("utf-8")
+        except UnicodeDecodeError:
+            return {}
 
     if not isinstance(response_body, str):
         return {}
@@ -169,6 +175,14 @@ class _HiddenInputParser(HTMLParser):
         self.hidden_inputs: dict[str, str] = {}
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._maybe_store_input(tag, attrs)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._maybe_store_input(tag, attrs)
+
+    def _maybe_store_input(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
         if tag.lower() != "input":
             return
 
@@ -182,7 +196,7 @@ class _HiddenInputParser(HTMLParser):
 
         name_attr = normalized_attrs.get("name")
         value_attr = normalized_attrs.get("value")
-        if not isinstance(name_attr, str) or not isinstance(value_attr, str):
+        if not isinstance(name_attr, str) or value_attr is None:
             return
 
         self.hidden_inputs[name_attr] = value_attr
