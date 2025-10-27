@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
 from pathlib import Path
+import re
 from typing import Iterable
 from urllib.parse import parse_qsl, urlencode
 
@@ -38,7 +40,8 @@ def main() -> None:
         benefit_response = client.perform_authenticated(benefit_request)
         print(f"Requisição por benefício realizada com NB: {nb_identifier}")
         print(benefit_response.status_code)
-        print(benefit_response.body)
+        hidden_inputs = _extract_hidden_inputs(benefit_response.body)
+        print(json.dumps(hidden_inputs, ensure_ascii=False))
 
 
 def _load_search_values(path: Path) -> Iterable[str]:
@@ -142,6 +145,35 @@ def _extract_nb_identifier(response_body: Mapping[str, object] | str) -> str | N
         return None
 
     return candidate.split()[0]
+
+
+_HIDDEN_INPUT_PATTERN = re.compile(
+    r"<input\b[^>]*type\s*=\s*['\"]hidden['\"][^>]*>", re.IGNORECASE
+)
+_NAME_ATTRIBUTE_PATTERN = re.compile(
+    r"name\s*=\s*['\"]([^'\"]+)['\"]", re.IGNORECASE
+)
+_VALUE_ATTRIBUTE_PATTERN = re.compile(
+    r"value\s*=\s*['\"]([^'\"]*)['\"]", re.IGNORECASE
+)
+
+
+def _extract_hidden_inputs(response_body: Mapping[str, object] | str) -> dict[str, str]:
+    """Return hidden input fields mapped as name/value pairs from an HTML response."""
+    response_body =  response_body['html']
+    if not isinstance(response_body, str):
+        return {}
+
+    hidden_inputs: dict[str, str] = {}
+    for match in _HIDDEN_INPUT_PATTERN.finditer(response_body):
+        element = match.group(0)
+        name_match = _NAME_ATTRIBUTE_PATTERN.search(element)
+        value_match = _VALUE_ATTRIBUTE_PATTERN.search(element)
+        if not name_match or not value_match:
+            continue
+        hidden_inputs[name_match.group(1)] = value_match.group(1)
+
+    return hidden_inputs
 
 
 if __name__ == "__main__":
