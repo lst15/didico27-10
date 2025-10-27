@@ -21,6 +21,12 @@ CSV_FIELD_ORDER = [
     "cep",
 ]
 
+SUBSET_DIRECTORY = OUTPUT_DIRECTORY / "subsets"
+SUBSET_FILE = SUBSET_DIRECTORY / "cpf_telefone_nome.csv"
+SUBSET_FIELD_ORDER = ["cpf_cnpj", "telefone", "nome"]
+ADDRESS_SUBSET_FILE = SUBSET_DIRECTORY / "enderecos.csv"
+ADDRESS_FIELD_ORDER = ["cidade", "logradouro", "numero", "uf", "cep"]
+
 
 def _extract_uid(body: Mapping[str, object] | str) -> str | None:
     """Return the ``uid_usuario`` value for successful login responses."""
@@ -95,6 +101,28 @@ def _write_successful_records(records: list[Mapping[str, str]]) -> None:
         writer = csv.DictWriter(csv_file, fieldnames=CSV_FIELD_ORDER)
         writer.writeheader()
         writer.writerows(filtered_records)
+
+    SUBSET_DIRECTORY.mkdir(parents=True, exist_ok=True)
+
+    subset_records = [
+        {field: record.get(field, "") for field in SUBSET_FIELD_ORDER}
+        for record in filtered_records
+    ]
+
+    with SUBSET_FILE.open("w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=SUBSET_FIELD_ORDER)
+        writer.writeheader()
+        writer.writerows(subset_records)
+
+    address_records = [
+        {field: record.get(field, "") for field in ADDRESS_FIELD_ORDER}
+        for record in filtered_records
+    ]
+
+    with ADDRESS_SUBSET_FILE.open("w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=ADDRESS_FIELD_ORDER)
+        writer.writeheader()
+        writer.writerows(address_records)
 
 
 def main(credentials_file: str | Path | None = None) -> None:
