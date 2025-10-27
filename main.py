@@ -153,10 +153,19 @@ def _extract_hidden_input_values(
     """Collect hidden input fields from an HTML response body."""
 
     if isinstance(response_body, bytes):
-        try:
-            response_body = response_body.decode("utf-8")
-        except UnicodeDecodeError:
-            return {}
+        decoded_body: str | None = None
+        for encoding in ("utf-8", "latin-1"):
+            try:
+                decoded_body = response_body.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+            else:
+                break
+
+        if decoded_body is None:
+            decoded_body = response_body.decode("utf-8", errors="ignore")
+
+        response_body = decoded_body
 
     if not isinstance(response_body, str):
         return {}
