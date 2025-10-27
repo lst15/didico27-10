@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
+from html.parser import HTMLParser
 from pathlib import Path
 
 def _extract_uid(body: Mapping[str, object] | str) -> str | None:
@@ -30,6 +32,40 @@ from app import (
 )
 
 
+class _ProfileInputParser(HTMLParser):
+    """Extract text-like input values keyed by their ``id`` attributes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fields: dict[str, str] = {}
+        self._allowed_types = {"text", "email", "int"}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:  # type: ignore[override]
+        if tag.lower() != "input":
+            return
+
+        attributes = {key: (value or "") for key, value in attrs}
+        if attributes.get("type", "").lower() not in self._allowed_types:
+            return
+
+        field_id = attributes.get("id", "")
+        field_value = attributes.get("value")
+
+        if field_id and field_value is not None:
+            self.fields[field_id] = field_value
+
+
+def _extract_profile_fields(body: Mapping[str, object] | str) -> Mapping[str, str]:
+    """Return profile input fields extracted from an HTML body."""
+
+    if not isinstance(body, str):
+        return {}
+
+    parser = _ProfileInputParser()
+    parser.feed(body)
+    return parser.fields
+
+
 def main(credentials_file: str | Path | None = None) -> None:
     """Execute the login workflow for all credentials in ``credentials_file``."""
 
@@ -54,7 +90,12 @@ def main(credentials_file: str | Path | None = None) -> None:
 
         profile = client.fetch_user_profile(uid, request.headers)
         print(profile.status_code)
-        print(profile.body)
+
+        fields = _extract_profile_fields(profile.body)
+        if fields:
+            print(json.dumps(fields, ensure_ascii=False))
+        else:
+            print(profile.body)
 
 
 if __name__ == "__main__":
