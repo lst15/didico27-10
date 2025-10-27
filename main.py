@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import parse_qsl, urlencode
@@ -170,45 +170,41 @@ def _extract_hidden_input_values(
     if not isinstance(response_body, str):
         return {}
 
-    parser = _HiddenInputParser()
-    parser.feed(response_body)
-    parser.close()
-    return parser.hidden_inputs
+    hidden_inputs: dict[str, str] = {}
+    input_pattern = re.compile(
+        r"<input\b[^>]*\btype\s*=\s*(?:\"hidden\"|'hidden'|hidden)[^>]*>",
+        flags=re.IGNORECASE,
+    )
+    name_pattern = re.compile(
+        r"name\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s\"'>]+))",
+        flags=re.IGNORECASE,
+    )
+    value_pattern = re.compile(
+        r"value\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s\"'>]+))",
+        flags=re.IGNORECASE,
+    )
 
+    for match in input_pattern.finditer(response_body):
+        tag = match.group(0)
+        name_match = name_pattern.search(tag)
+        value_match = value_pattern.search(tag)
+        if not name_match or not value_match:
+            continue
 
-class _HiddenInputParser(HTMLParser):
-    """Parse HTML and extract hidden input fields."""
+        name = next(
+            (group for group in name_match.groups() if group is not None),
+            None,
+        )
+        value = next(
+            (group for group in value_match.groups() if group is not None),
+            None,
+        )
+        if name is None or value is None:
+            continue
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.hidden_inputs: dict[str, str] = {}
+        hidden_inputs[name] = value
 
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self._maybe_store_input(tag, attrs)
-
-    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self._maybe_store_input(tag, attrs)
-
-    def _maybe_store_input(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
-        if tag.lower() != "input":
-            return
-
-        normalized_attrs = {
-            (name.lower() if name else name): value for name, value in attrs
-        }
-
-        input_type = normalized_attrs.get("type")
-        if not isinstance(input_type, str) or input_type.lower() != "hidden":
-            return
-
-        name_attr = normalized_attrs.get("name")
-        value_attr = normalized_attrs.get("value")
-        if not isinstance(name_attr, str) or value_attr is None:
-            return
-
-        self.hidden_inputs[name_attr] = value_attr
+    return hidden_inputs
 
 
 if __name__ == "__main__":
