@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Mapping
 
 from .models import LoginRequest
@@ -34,6 +35,8 @@ DEFAULT_CREDENTIALS: Mapping[str, str] = {
     "senha": "Carol@2024",
 }
 
+DEFAULT_CREDENTIALS_FILE = Path(__file__).resolve().parent.parent / "credentials.txt"
+
 DEFAULT_LOGIN_REQUEST = LoginRequest(
     url=DEFAULT_URL,
     headers=DEFAULT_HEADERS,
@@ -44,5 +47,6 @@ __all__ = [
     "DEFAULT_URL",
     "DEFAULT_HEADERS",
     "DEFAULT_CREDENTIALS",
+    "DEFAULT_CREDENTIALS_FILE",
     "DEFAULT_LOGIN_REQUEST",
 ]
