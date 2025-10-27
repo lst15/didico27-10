@@ -35,6 +35,26 @@ DEFAULT_CREDENTIALS: Mapping[str, str] = {
     "senha": "Carol@2024",
 }
 
+PROFILE_URL_TEMPLATE = "https://consignadorapido.com/usuario/perfil_usuario/{uid}"
+
+PROFILE_HEADERS: Mapping[str, str] = {
+    "Host": "consignadorapido.com",
+    "sec-ch-ua": '"Brave";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Linux"',
+    "upgrade-insecure-requests": "1",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "sec-gpc": "1",
+    "Accept-Language": "pt-BR,pt;q=0.9",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-User": "?1",
+    "Sec-Fetch-Dest": "document",
+    "Referer": "https://consignadorapido.com/usuario/home",
+    "Priority": "u=0, i",
+}
+
 DEFAULT_CREDENTIALS_FILE = Path(__file__).resolve().parent.parent / "credentials.txt"
 
 DEFAULT_LOGIN_REQUEST = LoginRequest(
@@ -47,6 +67,8 @@ __all__ = [
     "DEFAULT_URL",
     "DEFAULT_HEADERS",
     "DEFAULT_CREDENTIALS",
+    "PROFILE_HEADERS",
+    "PROFILE_URL_TEMPLATE",
     "DEFAULT_CREDENTIALS_FILE",
     "DEFAULT_LOGIN_REQUEST",
 ]
