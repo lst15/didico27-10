@@ -3,9 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import csv
 import json
 from html.parser import HTMLParser
 from pathlib import Path
+
+OUTPUT_DIRECTORY = Path(__file__).resolve().parent / "saida"
+OUTPUT_FILE = OUTPUT_DIRECTORY / "dados.csv"
+CSV_FIELD_ORDER = [
+    "nome",
+    "cpf_cnpj",
+    "telefone",
+    "cidade",
+    "logradouro",
+    "numero",
+    "uf",
+    "cep",
+]
+
 
 def _extract_uid(body: Mapping[str, object] | str) -> str | None:
     """Return the ``uid_usuario`` value for successful login responses."""
@@ -66,6 +81,22 @@ def _extract_profile_fields(body: Mapping[str, object] | str) -> Mapping[str, st
     return parser.fields
 
 
+def _write_successful_records(records: list[Mapping[str, str]]) -> None:
+    """Persist successful record data to ``OUTPUT_FILE`` in CSV format."""
+
+    OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
+
+    filtered_records = [
+        {field: record.get(field, "") for field in CSV_FIELD_ORDER}
+        for record in records
+    ]
+
+    with OUTPUT_FILE.open("w", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=CSV_FIELD_ORDER)
+        writer.writeheader()
+        writer.writerows(filtered_records)
+
+
 def main(credentials_file: str | Path | None = None) -> None:
     """Execute the login workflow for all credentials in ``credentials_file``."""
 
@@ -76,6 +107,8 @@ def main(credentials_file: str | Path | None = None) -> None:
         credential_sets = load_credentials(source)
     except (FileNotFoundError, CredentialFormatError) as exc:
         raise SystemExit(str(exc)) from exc
+
+    successful_records: list[dict[str, str]] = []
 
     for request in iter_login_requests(DEFAULT_LOGIN_REQUEST, credential_sets):
         login = request.credentials.get("login", "<unknown>")
@@ -94,8 +127,15 @@ def main(credentials_file: str | Path | None = None) -> None:
         fields = _extract_profile_fields(profile.body)
         if fields:
             print(json.dumps(fields, ensure_ascii=False))
+
+            record = {key: str(value) for key, value in fields.items()}
+            successful_records.append(record)
         else:
             print(profile.body)
+
+
+    if successful_records:
+        _write_successful_records(successful_records)
 
 
 if __name__ == "__main__":
