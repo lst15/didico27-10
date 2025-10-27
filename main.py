@@ -28,6 +28,18 @@ def main() -> None:
         print(response.status_code)
         print(response.body)
 
+        nb_identifier = _extract_nb_identifier(response.body)
+        if nb_identifier is None:
+            continue
+
+        benefit_request = _build_benefit_request(
+            DEFAULT_OFFLINE_REQUEST, nb_identifier
+        )
+        benefit_response = client.perform_authenticated(benefit_request)
+        print(f"Requisição por benefício realizada com NB: {nb_identifier}")
+        print(benefit_response.status_code)
+        print(benefit_response.body)
+
 
 def _load_search_values(path: Path) -> Iterable[str]:
     """Yield non-empty search values from the provided text file."""
@@ -49,7 +61,7 @@ def _build_offline_request(
 ) -> ServiceRequest:
     """Create a new offline request by replacing the search value in the payload."""
 
-    payload = _replace_search_value(base_request.payload, search_value)
+    payload = _override_payload_fields(base_request.payload, {"busca": search_value})
     return ServiceRequest(
         url=base_request.url,
         headers=base_request.headers,
@@ -57,33 +69,79 @@ def _build_offline_request(
     )
 
 
-def _replace_search_value(
-    payload: Mapping[str, str] | str, search_value: str
+def _build_benefit_request(
+    base_request: ServiceRequest, nb_identifier: str
+) -> ServiceRequest:
+    """Create a new request targeting benefit lookups using the NB identifier."""
+
+    payload = _override_payload_fields(
+        base_request.payload,
+        {"selectBC": "beneficio", "busca": f"{nb_identifier} "},
+    )
+    return ServiceRequest(
+        url=base_request.url,
+        headers=base_request.headers,
+        payload=payload,
+    )
+
+
+def _override_payload_fields(
+    payload: Mapping[str, str] | str, overrides: Mapping[str, str]
 ) -> Mapping[str, str] | str:
-    """Return the payload with the "busca" field replaced by ``search_value``."""
+    """Return ``payload`` with the provided form fields replaced."""
 
     if isinstance(payload, str):
         pairs = parse_qsl(payload, keep_blank_values=True)
         updated_pairs = []
-        replaced = False
+        seen_keys: set[str] = set()
         for key, value in pairs:
-            if key == "busca":
-                updated_pairs.append((key, search_value))
-                replaced = True
+            if key in overrides:
+                updated_pairs.append((key, overrides[key]))
+                seen_keys.add(key)
             else:
                 updated_pairs.append((key, value))
-        if not replaced:
-            updated_pairs.append(("busca", search_value))
+        for key, value in overrides.items():
+            if key not in seen_keys:
+                updated_pairs.append((key, value))
         return urlencode(updated_pairs, doseq=True)
 
     if isinstance(payload, Mapping):
         updated_payload = dict(payload)
-        updated_payload["busca"] = search_value
+        updated_payload.update(overrides)
         return updated_payload
 
     raise TypeError(
-        "Tipo de payload não suportado para substituição dinâmica do campo 'busca'."
+        "Tipo de payload não suportado para substituição dinâmica de campos."
     )
+
+
+def _extract_nb_identifier(response_body: Mapping[str, object] | str) -> str | None:
+    """Retrieve the NB identifier from the service response, if present."""
+
+    if not isinstance(response_body, Mapping):
+        return None
+
+    nb_values = response_body.get("nb")
+    if not isinstance(nb_values, list):
+        return None
+
+    candidate = None
+    if len(nb_values) > 1 and isinstance(nb_values[1], str):
+        candidate = nb_values[1]
+    else:
+        for value in nb_values:
+            if isinstance(value, str) and value.strip():
+                candidate = value
+                break
+
+    if not candidate:
+        return None
+
+    candidate = candidate.strip()
+    if not candidate:
+        return None
+
+    return candidate.split()[0]
 
 
 if __name__ == "__main__":
