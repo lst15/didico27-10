@@ -330,7 +330,7 @@ def _append_hidden_inputs_to_csv(
         bank_label = _lookup_bank_name(bank_code)
         if bank_label:
             bank_directory = _ensure_bank_directory(bank_label)
-            _append_bank_data(bank_directory, hidden_inputs)
+            _append_bank_data(bank_directory, processed_row)
             bank_numbers = _extract_bank_numbers(hidden_inputs)
             if bank_numbers:
                 _append_bank_numbers(bank_directory, bank_numbers)
@@ -541,16 +541,11 @@ def _ensure_bank_directory(bank_label: str) -> Path:
     return bank_directory
 
 
-def _append_bank_data(bank_directory: Path, hidden_inputs: Mapping[str, object]) -> None:
-    """Append the complete ``hidden_inputs`` data to ``dados.txt``."""
+def _append_bank_data(bank_directory: Path, row_data: Mapping[str, str]) -> None:
+    """Append ``row_data`` to ``dados.txt`` using pipe-delimited format."""
 
     bank_data_file = bank_directory / "dados.txt"
-    serialized = json.dumps(hidden_inputs, ensure_ascii=False)
-    needs_newline = bank_data_file.exists() and bank_data_file.stat().st_size > 0
-    with bank_data_file.open("a", encoding="utf-8") as data_file:
-        if needs_newline:
-            data_file.write("\n")
-        data_file.write(serialized)
+    _write_csv_row_with_dynamic_schema(row_data, bank_data_file)
 
 
 def _extract_bank_numbers(hidden_inputs: Mapping[str, object]) -> list[str]:
