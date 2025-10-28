@@ -18,6 +18,7 @@ BASE_DIR = Path(__file__).resolve().parent
 SEARCH_VALUES_FILE = BASE_DIR / "search_values.txt"
 OUTPUT_DIR = BASE_DIR / "saida"
 OUTPUT_FILE = OUTPUT_DIR / "dados.csv"
+OUTPUT_BANKS_DIR = OUTPUT_DIR / "bancos"
 
 
 def main() -> None:
@@ -245,12 +246,25 @@ def _append_hidden_inputs_to_csv(
 ) -> None:
     """Persist hidden input data to ``output_file`` in CSV format."""
 
-    output_dir = output_file.parent
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     processed_row = {
         key: _stringify_csv_value(value) for key, value in hidden_inputs.items()
     }
+
+    _write_csv_row_with_dynamic_schema(processed_row, output_file)
+
+    bank_code = processed_row.get("banco_codigo", "").strip()
+    if bank_code:
+        bank_output_file = OUTPUT_BANKS_DIR / f"{bank_code}.csv"
+        _write_csv_row_with_dynamic_schema(processed_row, bank_output_file)
+
+
+def _write_csv_row_with_dynamic_schema(
+    row_data: Mapping[str, str], output_file: Path
+) -> None:
+    """Append ``row_data`` to ``output_file`` ensuring schema compatibility."""
+
+    output_dir = output_file.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     output_exists = output_file.exists() and output_file.stat().st_size > 0
     if output_exists:
@@ -264,7 +278,7 @@ def _append_hidden_inputs_to_csv(
     else:
         existing_fields = []
 
-    processed_fields = sorted(processed_row.keys())
+    processed_fields = sorted(row_data.keys())
 
     if existing_fields:
         existing_field_set = set(existing_fields)
@@ -285,11 +299,11 @@ def _append_hidden_inputs_to_csv(
                 csv_file, fieldnames=merged_fields, delimiter=";", extrasaction="ignore"
             )
             writer.writeheader()
-            for row in existing_rows:
-                writer.writerow({field: row.get(field, "") for field in merged_fields})
-            writer.writerow(
-                {field: processed_row.get(field, "") for field in merged_fields}
-            )
+            for existing_row in existing_rows:
+                writer.writerow(
+                    {field: existing_row.get(field, "") for field in merged_fields}
+                )
+            writer.writerow({field: row_data.get(field, "") for field in merged_fields})
         return
 
     fieldnames = existing_fields if existing_fields else processed_fields
@@ -301,7 +315,7 @@ def _append_hidden_inputs_to_csv(
         )
         if write_header:
             writer.writeheader()
-        writer.writerow({field: processed_row.get(field, "") for field in fieldnames})
+        writer.writerow({field: row_data.get(field, "") for field in fieldnames})
 
 
 def _stringify_csv_value(value: object) -> str:
