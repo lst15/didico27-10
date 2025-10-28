@@ -375,8 +375,13 @@ def _extract_bank_consultation_records(
 def _persist_bank_consultations(records: Sequence[_BankConsultationRecord]) -> None:
     """Create per-bank folders and append consultation data to the expected files."""
 
+    OUTPUT_BANKS_DIR.mkdir(parents=True, exist_ok=True)
+
     for record in records:
-        bank_dir_name = record.label.replace("/", "-").replace("\\", "-")
+        bank_dir_name = record.label.strip()
+        if not bank_dir_name:
+            continue
+
         bank_dir = OUTPUT_BANKS_DIR / bank_dir_name
         bank_dir.mkdir(parents=True, exist_ok=True)
 
