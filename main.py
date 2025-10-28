@@ -21,7 +21,7 @@ from app import DEFAULT_LOGIN_REQUEST, DEFAULT_OFFLINE_REQUEST, LoginClient, Ser
 BASE_DIR = Path(__file__).resolve().parent
 SEARCH_VALUES_FILE = BASE_DIR / "search_values.txt"
 OUTPUT_DIR = BASE_DIR / "saida"
-OUTPUT_FILE = OUTPUT_DIR / "dados.csv"
+OUTPUT_FILE = OUTPUT_DIR / "dados.txt"
 OUTPUT_BANKS_DIR = OUTPUT_DIR / "bancos"
 BANKS_FILE = BASE_DIR / "bancos.txt"
 
@@ -317,7 +317,7 @@ def _extract_hidden_inputs(
 def _append_hidden_inputs_to_csv(
     hidden_inputs: Mapping[str, object], output_file: Path
 ) -> None:
-    """Persist hidden input data to ``output_file`` in CSV format."""
+    """Persist hidden input data to ``output_file`` in pipe-delimited text format."""
 
     processed_row = {
         key: _stringify_csv_value(value) for key, value in hidden_inputs.items()
@@ -329,7 +329,7 @@ def _append_hidden_inputs_to_csv(
     if bank_code:
         bank_name = _lookup_bank_name(bank_code)
         bank_filename = _sanitize_bank_filename(bank_name) if bank_name else bank_code
-        bank_output_file = OUTPUT_BANKS_DIR / f"{bank_filename}.csv"
+        bank_output_file = OUTPUT_BANKS_DIR / f"{bank_filename}.txt"
         _write_csv_row_with_dynamic_schema(processed_row, bank_output_file)
 
 
@@ -451,7 +451,7 @@ def _write_csv_row_with_dynamic_schema(
     output_exists = output_file.exists() and output_file.stat().st_size > 0
     if output_exists:
         with output_file.open("r", encoding="utf-8", newline="") as existing_file:
-            reader = csv.reader(existing_file, delimiter=";")
+            reader = csv.reader(existing_file, delimiter="|")
             try:
                 existing_header = next(reader)
             except StopIteration:
@@ -470,15 +470,15 @@ def _write_csv_row_with_dynamic_schema(
         new_fields = set()
 
     if new_fields:
-        # Merge existing data with the new schema and rewrite the CSV file.
+        # Merge existing data with the new schema and rewrite the output file.
         merged_fields = sorted(existing_field_set | set(processed_fields))
         with output_file.open("r", encoding="utf-8", newline="") as existing_file:
-            reader = csv.DictReader(existing_file, delimiter=";")
+            reader = csv.DictReader(existing_file, delimiter="|")
             existing_rows = list(reader)
 
         with output_file.open("w", encoding="utf-8", newline="") as csv_file:
             writer = csv.DictWriter(
-                csv_file, fieldnames=merged_fields, delimiter=";", extrasaction="ignore"
+                csv_file, fieldnames=merged_fields, delimiter="|", extrasaction="ignore"
             )
             writer.writeheader()
             for existing_row in existing_rows:
@@ -493,7 +493,7 @@ def _write_csv_row_with_dynamic_schema(
 
     with output_file.open("a", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(
-            csv_file, fieldnames=fieldnames, delimiter=";", extrasaction="ignore"
+            csv_file, fieldnames=fieldnames, delimiter="|", extrasaction="ignore"
         )
         if write_header:
             writer.writeheader()
@@ -501,7 +501,7 @@ def _write_csv_row_with_dynamic_schema(
 
 
 def _stringify_csv_value(value: object) -> str:
-    """Convert ``value`` into a string suitable for CSV serialization."""
+    """Convert ``value`` into a string suitable for pipe-delimited serialization."""
 
     if value is None:
         return ""
