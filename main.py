@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 import csv
 import json
 from pathlib import Path
 import re
 import threading
+from numbers import Number
 from functools import lru_cache
 from html import unescape
 from html.parser import HTMLParser
-from typing import Iterable, Sequence
+from typing import Iterable
 from urllib.parse import parse_qsl, urlencode
 
 from app import DEFAULT_LOGIN_REQUEST, DEFAULT_OFFLINE_REQUEST, LoginClient, ServiceRequest
@@ -102,6 +103,7 @@ def _run_search_workflow(
             print(f"Busca realizada: {search_value}")
             print(response.status_code)
             print(response.body)
+            _process_bank_directories(response.body, file_lock)
 
             nb_identifier = _extract_nb_identifier(response.body)
             if nb_identifier is None:
@@ -331,6 +333,216 @@ def _append_hidden_inputs_to_csv(
         bank_filename = _sanitize_bank_filename(bank_name) if bank_name else bank_code
         bank_output_file = OUTPUT_BANKS_DIR / f"{bank_filename}.txt"
         _write_csv_row_with_dynamic_schema(processed_row, bank_output_file)
+
+
+def _process_bank_directories(
+    response_body: Mapping[str, object] | Sequence[object] | str,
+    file_lock: threading.Lock,
+) -> None:
+    """Create per-bank directories and files using the consultation response."""
+
+    banks = _extract_banks_from_response(response_body)
+    if not banks:
+        return
+
+    with file_lock:
+        for bank in banks:
+            label = bank.get("label")
+            if not isinstance(label, str) or not label.strip():
+                continue
+
+            directory_name = _sanitize_bank_directory_name(label)
+            bank_directory = OUTPUT_BANKS_DIR / directory_name
+            bank_directory.mkdir(parents=True, exist_ok=True)
+
+            dados_path = bank_directory / "dados.txt"
+            dados_payload = json.dumps(
+                bank,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+                default=_stringify_unknown_json_value,
+            )
+            dados_path.write_text(f"{dados_payload}\n", encoding="utf-8")
+
+            numeros_path = bank_directory / "numeros.txt"
+            numbers = _collect_numeric_values(bank)
+            numeros_content = "\n".join(numbers)
+            if numbers:
+                numeros_content += "\n"
+            numeros_path.write_text(numeros_content, encoding="utf-8")
+
+
+def _extract_banks_from_response(
+    response_body: Mapping[str, object] | Sequence[object] | str
+) -> list[dict[str, object]]:
+    """Return bank entries found within ``response_body``."""
+
+    if isinstance(response_body, Mapping):
+        return _extract_banks_from_object(response_body)
+
+    if isinstance(response_body, Sequence) and not isinstance(
+        response_body, (str, bytes, bytearray)
+    ):
+        banks: list[dict[str, object]] = []
+        for item in response_body:
+            banks.extend(_extract_banks_from_response(item))
+        return banks
+
+    if isinstance(response_body, str):
+        try:
+            parsed = json.loads(response_body)
+        except json.JSONDecodeError:
+            return []
+        return _extract_banks_from_response(parsed)
+
+    return []
+
+
+def _extract_banks_from_object(obj: Mapping[str, object]) -> list[dict[str, object]]:
+    """Traverse ``obj`` collecting mappings that resemble bank entries."""
+
+    banks: list[dict[str, object]] = []
+    seen_ids: set[int] = set()
+
+    def _consume(value: object) -> None:
+        if isinstance(value, Mapping):
+            mapping_id = id(value)
+            if mapping_id in seen_ids:
+                return
+            seen_ids.add(mapping_id)
+
+            if _looks_like_bank_entry(value):
+                banks.append(_normalize_bank_entry(value))
+                return
+
+            for nested in value.values():
+                _consume(nested)
+            return
+
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            for item in value:
+                _consume(item)
+
+    _consume(obj)
+    return banks
+
+
+def _looks_like_bank_entry(candidate: Mapping[str, object]) -> bool:
+    """Heuristically determine if ``candidate`` represents a bank entry."""
+
+    label = candidate.get("label")
+    if not isinstance(label, str) or not label.strip():
+        return False
+
+    meaningful_keys = {
+        key
+        for key in candidate
+        if key not in {"label", "texto", "descricao", "description"}
+    }
+
+    if meaningful_keys & {
+        "value",
+        "codigo",
+        "code",
+        "id",
+        "numeros",
+        "dados",
+        "details",
+    }:
+        return True
+
+    return bool(meaningful_keys)
+
+
+def _normalize_bank_entry(candidate: Mapping[str, object]) -> dict[str, object]:
+    """Convert ``candidate`` into a JSON-serializable mapping."""
+
+    normalized = _make_json_serializable(candidate)
+    if isinstance(normalized, dict):
+        return normalized
+    label = candidate.get("label")
+    label_text = label if isinstance(label, str) else str(label)
+    return {"label": label_text}
+
+
+def _sanitize_bank_directory_name(label: str) -> str:
+    """Return a filesystem-safe directory name derived from ``label``."""
+
+    sanitized = label.strip().replace("/", "-").replace("\\", "-")
+    sanitized = re.sub(r"\s+", " ", sanitized, flags=re.UNICODE)
+    sanitized = sanitized or "banco"
+    return sanitized
+
+
+def _collect_numeric_values(obj: object) -> list[str]:
+    """Collect numeric values from ``obj`` preserving their traversal order."""
+
+    collected: list[str] = []
+
+    def _visit(value: object) -> None:
+        if isinstance(value, bool):
+            return
+
+        if isinstance(value, Number):
+            collected.append(str(value))
+            return
+
+        if isinstance(value, Mapping):
+            for nested in value.values():
+                _visit(nested)
+            return
+
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            for item in value:
+                _visit(item)
+            return
+
+        if isinstance(value, str):
+            stripped = value.strip()
+            if _is_numeric_string(stripped):
+                collected.append(stripped)
+
+    _visit(obj)
+    return collected
+
+
+def _is_numeric_string(value: str) -> bool:
+    """Return ``True`` if ``value`` represents a numeric literal."""
+
+    return bool(re.fullmatch(r"[+-]?\d+(?:\.\d+)?", value))
+
+
+def _make_json_serializable(value: object) -> object:
+    """Recursively convert ``value`` into JSON-serializable primitives."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _make_json_serializable(item) for key, item in value.items()
+        }
+
+    if isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        return [_make_json_serializable(item) for item in value]
+
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, (str, Number)) or value is None:
+        return value
+
+    return str(value)
+
+
+def _stringify_unknown_json_value(value: object) -> str:
+    """Fallback serializer used when dumping bank entries to JSON."""
+
+    return str(value)
 
 
 def _lookup_bank_name(bank_code: str) -> str | None:
