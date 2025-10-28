@@ -437,18 +437,30 @@ def _stringify_csv_value(value: object) -> str:
         return ""
 
     if isinstance(value, str):
-        return value
+        return _normalize_whitespace(value)
 
     if isinstance(value, (int, float)):
         return str(value)
 
     if isinstance(value, (list, tuple, set)):
-        return ", ".join(str(item) for item in value)
+        return ", ".join(
+            _normalize_whitespace(str(item))
+            if isinstance(item, str)
+            else str(item)
+            for item in value
+        )
 
     if isinstance(value, Mapping):
         return json.dumps(value, ensure_ascii=False)
 
     return str(value)
+
+
+def _normalize_whitespace(value: str) -> str:
+    """Collapse consecutive whitespace characters in ``value`` into single spaces."""
+
+    normalized = re.sub(r"\s+", " ", value, flags=re.UNICODE)
+    return normalized.strip()
 
 
 if __name__ == "__main__":
