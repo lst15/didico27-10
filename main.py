@@ -161,13 +161,6 @@ def _launch_interface() -> None:
         _run_workflow(threads_value)
 
 
-if __name__ == "__main__":
-    if len(sys.argv) == 1:
-        _launch_interface()
-    else:
-        main()
-
-
 def _run_search_workflow(
     search_value: str,
     client: LoginClient,
@@ -694,4 +687,7 @@ def _is_fixed_line_number(number: str) -> bool:
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) == 1:
+        _launch_interface()
+    else:
+        main()
