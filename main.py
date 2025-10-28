@@ -6,6 +6,8 @@ from collections.abc import Mapping
 import csv
 import json
 from pathlib import Path
+import re
+from functools import lru_cache
 from html import unescape
 from html.parser import HTMLParser
 from typing import Iterable
@@ -19,6 +21,7 @@ SEARCH_VALUES_FILE = BASE_DIR / "search_values.txt"
 OUTPUT_DIR = BASE_DIR / "saida"
 OUTPUT_FILE = OUTPUT_DIR / "dados.csv"
 OUTPUT_BANKS_DIR = OUTPUT_DIR / "bancos"
+BANKS_FILE = BASE_DIR / "bancos.txt"
 
 
 def main() -> None:
@@ -254,8 +257,117 @@ def _append_hidden_inputs_to_csv(
 
     bank_code = processed_row.get("banco_codigo", "").strip()
     if bank_code:
-        bank_output_file = OUTPUT_BANKS_DIR / f"{bank_code}.csv"
+        bank_name = _lookup_bank_name(bank_code)
+        bank_filename = _sanitize_bank_filename(bank_name) if bank_name else bank_code
+        bank_output_file = OUTPUT_BANKS_DIR / f"{bank_filename}.csv"
         _write_csv_row_with_dynamic_schema(processed_row, bank_output_file)
+
+
+def _lookup_bank_name(bank_code: str) -> str | None:
+    """Return the bank name associated with ``bank_code`` using ``BANKS_FILE``."""
+
+    normalized_code = bank_code.zfill(3)
+
+    try:
+        bank_mapping = _load_bank_mapping()
+    except OSError:
+        return None
+
+    return bank_mapping.get(normalized_code) or bank_mapping.get(bank_code)
+
+
+@lru_cache(maxsize=1)
+def _load_bank_mapping() -> dict[str, str]:
+    """Load the bank code/name mapping from ``BANKS_FILE``."""
+
+    if not BANKS_FILE.exists():
+        return {}
+
+    try:
+        content = BANKS_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+
+    content = content.strip()
+    if not content:
+        return {}
+
+    json_mapping = _try_parse_bank_json(content)
+    if json_mapping:
+        return json_mapping
+
+    mapping: dict[str, str] = {}
+    for line in content.splitlines():
+        code, name = _parse_bank_line(line)
+        if code and name:
+            mapping[code] = name
+
+    return mapping
+
+
+def _try_parse_bank_json(content: str) -> dict[str, str]:
+    """Attempt to parse ``content`` as JSON bank mappings."""
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return {}
+
+    mapping: dict[str, str] = {}
+
+    def _consume(obj: object) -> None:
+        if isinstance(obj, list):
+            for item in obj:
+                _consume(item)
+            return
+
+        if isinstance(obj, Mapping):
+            code = obj.get("value") or obj.get("code")
+            name = obj.get("label") or obj.get("name")
+            if isinstance(code, str) and isinstance(name, str):
+                normalized_code = _clean_bank_code(code)
+                if normalized_code and name.strip():
+                    mapping[normalized_code] = name.strip()
+            for value in obj.values():
+                _consume(value)
+
+    _consume(data)
+    return mapping
+
+
+def _parse_bank_line(line: str) -> tuple[str | None, str | None]:
+    """Extract the bank ``code`` and ``name`` from a raw ``line``."""
+
+    raw_line = line.strip()
+    if not raw_line or raw_line.startswith("#"):
+        return None, None
+
+    # Try common separators first.
+    for separator in (";", ",", " - ", "-", "\t"):
+        if separator in raw_line:
+            code, name = raw_line.split(separator, 1)
+            return _clean_bank_code(code), name.strip() or None
+
+    parts = raw_line.split(None, 1)
+    if len(parts) == 2:
+        return _clean_bank_code(parts[0]), parts[1].strip() or None
+
+    return None, None
+
+
+def _clean_bank_code(code: str) -> str | None:
+    """Normalize ``code`` ensuring it contains only digits."""
+
+    digits = re.sub(r"\D", "", code)
+    return digits.zfill(3) if digits else None
+
+
+def _sanitize_bank_filename(bank_name: str) -> str:
+    """Return a filesystem-friendly filename derived from ``bank_name``."""
+
+    sanitized = re.sub(r"[^\w]+", "_", bank_name, flags=re.UNICODE)
+    sanitized = sanitized.strip("_")
+    return sanitized or "banco"
 
 
 def _write_csv_row_with_dynamic_schema(
