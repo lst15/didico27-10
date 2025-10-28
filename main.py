@@ -327,10 +327,13 @@ def _append_hidden_inputs_to_csv(
 
     bank_code = processed_row.get("banco_codigo", "").strip()
     if bank_code:
-        bank_name = _lookup_bank_name(bank_code)
-        bank_filename = _sanitize_bank_filename(bank_name) if bank_name else bank_code
-        bank_output_file = OUTPUT_BANKS_DIR / f"{bank_filename}.txt"
-        _write_csv_row_with_dynamic_schema(processed_row, bank_output_file)
+        bank_label = _lookup_bank_name(bank_code)
+        if bank_label:
+            bank_directory = _ensure_bank_directory(bank_label)
+            _append_bank_data(bank_directory, hidden_inputs)
+            bank_numbers = _extract_bank_numbers(hidden_inputs)
+            if bank_numbers:
+                _append_bank_numbers(bank_directory, bank_numbers)
 
 
 def _lookup_bank_name(bank_code: str) -> str | None:
@@ -432,14 +435,6 @@ def _clean_bank_code(code: str) -> str | None:
     return digits.zfill(3) if digits else None
 
 
-def _sanitize_bank_filename(bank_name: str) -> str:
-    """Return a filesystem-friendly filename derived from ``bank_name``."""
-
-    sanitized = re.sub(r"[^\w]+", "_", bank_name, flags=re.UNICODE)
-    sanitized = sanitized.strip("_")
-    return sanitized or "banco"
-
-
 def _write_csv_row_with_dynamic_schema(
     row_data: Mapping[str, str], output_file: Path
 ) -> None:
@@ -531,6 +526,60 @@ def _normalize_whitespace(value: str) -> str:
 
     normalized = re.sub(r"\s+", " ", value, flags=re.UNICODE)
     return normalized.strip()
+
+
+def _ensure_bank_directory(bank_label: str) -> Path:
+    """Create (if needed) and return the directory assigned to ``bank_label``."""
+
+    normalized_label = bank_label.strip()
+    if not normalized_label:
+        raise ValueError("bank_label must not be empty")
+
+    safe_label = normalized_label.replace("/", "-")
+    bank_directory = OUTPUT_BANKS_DIR / safe_label
+    bank_directory.mkdir(parents=True, exist_ok=True)
+    return bank_directory
+
+
+def _append_bank_data(bank_directory: Path, hidden_inputs: Mapping[str, object]) -> None:
+    """Append the complete ``hidden_inputs`` data to ``dados.txt``."""
+
+    bank_data_file = bank_directory / "dados.txt"
+    serialized = json.dumps(hidden_inputs, ensure_ascii=False)
+    needs_newline = bank_data_file.exists() and bank_data_file.stat().st_size > 0
+    with bank_data_file.open("a", encoding="utf-8") as data_file:
+        if needs_newline:
+            data_file.write("\n")
+        data_file.write(serialized)
+
+
+def _extract_bank_numbers(hidden_inputs: Mapping[str, object]) -> list[str]:
+    """Return a list of number strings extracted from ``hidden_inputs``."""
+
+    numbers: list[str] = []
+    raw_numbers = hidden_inputs.get("phones")
+
+    def _collect(value: object) -> None:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                numbers.append(stripped)
+            return
+        if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
+            for item in value:
+                _collect(item)
+
+    _collect(raw_numbers)
+    return numbers
+
+
+def _append_bank_numbers(bank_directory: Path, numbers: Sequence[str]) -> None:
+    """Append ``numbers`` to the ``numeros.txt`` file, one per line."""
+
+    numbers_file = bank_directory / "numeros.txt"
+    with numbers_file.open("a", encoding="utf-8") as output:
+        for number in numbers:
+            output.write(f"{number}\n")
 
 
 if __name__ == "__main__":
