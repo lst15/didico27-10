@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 import json
 from pathlib import Path
-import re
 from html import unescape
+from html.parser import HTMLParser
 from typing import Iterable
 from urllib.parse import parse_qsl, urlencode
 
@@ -148,49 +148,90 @@ def _extract_nb_identifier(response_body: Mapping[str, object] | str) -> str | N
     return candidate.split()[0]
 
 
-_HIDDEN_INPUT_PATTERN = re.compile(
-    r"<input\b[^>]*type\s*=\s*['\"]hidden['\"][^>]*>", re.IGNORECASE
-)
-_NAME_ATTRIBUTE_PATTERN = re.compile(
-    r"name\s*=\s*['\"]([^'\"]+)['\"]", re.IGNORECASE
-)
-_VALUE_ATTRIBUTE_PATTERN = re.compile(
-    r"value\s*=\s*['\"]([^'\"]*)['\"]", re.IGNORECASE
-)
+class _HiddenInputParser(HTMLParser):
+    """Parse hidden inputs and ``phone_with_ddd`` spans from HTML."""
 
-_PHONE_SPAN_PATTERN = re.compile(
-    r"<span\\b[^>]*class\\s*=\\s*['\"]([^'\"]*\\bphone_with_ddd\\b[^'\"]*)['\"][^>]*>(.*?)</span>",
-    re.IGNORECASE | re.DOTALL,
-)
-_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.hidden_inputs: dict[str, str] = {}
+        self.phones: list[str] = []
+        self._phone_depth = 0
+        self._current_phone_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        attrs_dict = {name.lower(): (value or "") for name, value in attrs}
+        if tag == "input":
+            input_type = attrs_dict.get("type", "").lower()
+            if input_type == "hidden":
+                name = attrs_dict.get("name")
+                if name:
+                    self.hidden_inputs[name] = attrs_dict.get("value", "")
+            return
+
+        if tag == "span":
+            classes = attrs_dict.get("class", "")
+            class_names = {cls.lower() for cls in classes.split() if cls}
+            if "phone_with_ddd" in class_names:
+                if self._phone_depth == 0:
+                    self._current_phone_parts = []
+                self._phone_depth += 1
+                return
+
+        if self._phone_depth and tag == "br":
+            self._current_phone_parts.append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag == "span" and self._phone_depth:
+            self._phone_depth -= 1
+            if self._phone_depth == 0:
+                phone = "".join(self._current_phone_parts)
+                phone = unescape(phone)
+                phone = " ".join(phone.split())
+                if phone:
+                    self.phones.append(phone)
+                self._current_phone_parts = []
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_data(self, data: str) -> None:
+        if self._phone_depth:
+            self._current_phone_parts.append(data)
+
+    def handle_entityref(self, name: str) -> None:
+        if self._phone_depth:
+            self._current_phone_parts.append(unescape(f"&{name};"))
+
+    def handle_charref(self, name: str) -> None:
+        if self._phone_depth:
+            self._current_phone_parts.append(unescape(f"&#{name};"))
 
 def _extract_hidden_inputs(
     response_body: Mapping[str, object] | str,
 ) -> dict[str, object]:
     """Return hidden input fields mapped as name/value pairs from an HTML response."""
-    response_body =  response_body['html']
-    if not isinstance(response_body, str):
+
+    html: str | None
+    if isinstance(response_body, Mapping):
+        html_candidate = response_body.get("html")
+        html = html_candidate if isinstance(html_candidate, str) else None
+    elif isinstance(response_body, str):
+        html = response_body
+    else:
+        html = None
+
+    if html is None:
         return {"phones": []}
 
-    hidden_inputs: dict[str, str] = {}
-    for match in _HIDDEN_INPUT_PATTERN.finditer(response_body):
-        element = match.group(0)
-        name_match = _NAME_ATTRIBUTE_PATTERN.search(element)
-        value_match = _VALUE_ATTRIBUTE_PATTERN.search(element)
-        if not name_match or not value_match:
-            continue
-        hidden_inputs[name_match.group(1)] = value_match.group(1)
+    parser = _HiddenInputParser()
+    parser.feed(html)
+    parser.close()
 
-    phones: list[str] = []
-    for span_match in _PHONE_SPAN_PATTERN.finditer(response_body):
-        content = span_match.group(2)
-        text = _HTML_TAG_PATTERN.sub("", content)
-        text = unescape(text).strip()
-        if text:
-            phones.append(text)
-
-    result: dict[str, object] = dict(hidden_inputs)
-    result["phones"] = phones
+    result: dict[str, object] = dict(parser.hidden_inputs)
+    result["phones"] = parser.phones
     return result
 
 
