@@ -328,9 +328,8 @@ def _append_hidden_inputs_to_csv(
     bank_code = processed_row.get("banco_codigo", "").strip()
     if bank_code:
         bank_name = _lookup_bank_name(bank_code)
-        bank_filename = _sanitize_bank_filename(bank_name) if bank_name else bank_code
-        bank_output_file = OUTPUT_BANKS_DIR / f"{bank_filename}.txt"
-        _write_csv_row_with_dynamic_schema(processed_row, bank_output_file)
+        bank_label = bank_name or bank_code
+        _append_numbers_to_bank_directory(bank_label, hidden_inputs)
 
 
 def _lookup_bank_name(bank_code: str) -> str | None:
@@ -438,6 +437,68 @@ def _sanitize_bank_filename(bank_name: str) -> str:
     sanitized = re.sub(r"[^\w]+", "_", bank_name, flags=re.UNICODE)
     sanitized = sanitized.strip("_")
     return sanitized or "banco"
+
+
+def _append_numbers_to_bank_directory(
+    bank_label: str, hidden_inputs: Mapping[str, object]
+) -> None:
+    """Store numeric values for ``bank_label`` inside its ``dados.txt`` file."""
+
+    sanitized_label = _sanitize_bank_filename(bank_label)
+    bank_dir = OUTPUT_BANKS_DIR / sanitized_label
+    bank_dir.mkdir(parents=True, exist_ok=True)
+
+    numbers = _collect_numeric_values(hidden_inputs)
+    if not numbers:
+        return
+
+    numbers_file = bank_dir / "dados.txt"
+    with numbers_file.open("a", encoding="utf-8") as output_file:
+        for number in numbers:
+            output_file.write(f"{number}\n")
+
+
+def _collect_numeric_values(data: Mapping[str, object]) -> list[str]:
+    """Return all digit sequences found within ``data`` values."""
+
+    numbers: list[str] = []
+
+    def _consume(value: object) -> None:
+        if isinstance(value, bool):
+            return
+
+        if isinstance(value, (int, float)):
+            for match in re.findall(r"\d+", str(value)):
+                if match:
+                    numbers.append(match)
+            return
+
+        if isinstance(value, str):
+            for match in re.findall(r"\d+", value):
+                if match:
+                    numbers.append(match)
+            return
+
+        if isinstance(value, Mapping):
+            for nested_value in value.values():
+                _consume(nested_value)
+            return
+
+        if isinstance(value, (list, tuple, set)):
+            for nested_value in value:
+                _consume(nested_value)
+
+    for item in data.values():
+        _consume(item)
+
+    ordered_numbers: list[str] = []
+    seen: set[str] = set()
+    for number in numbers:
+        if number not in seen:
+            ordered_numbers.append(number)
+            seen.add(number)
+
+    return ordered_numbers
 
 
 def _write_csv_row_with_dynamic_schema(
