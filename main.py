@@ -1,8 +1,16 @@
-"""Entry point for executing the login request workflow."""
+"""Entry point for executing the login request workflow.
+
+When executed directly without command-line parameters, this module now
+displays a minimal graphical interface that allows the operator to choose the
+desired number of threads before starting the workflow.
+"""
 
 from __future__ import annotations
 
 import argparse
+import sys
+import tkinter as tk
+from tkinter import messagebox
 from collections.abc import Mapping
 import csv
 import json
@@ -39,6 +47,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     """Execute the configured login request and print its outcome."""
 
     args = _parse_arguments(argv)
+    _run_workflow(args.threads)
+
+
+def _run_workflow(max_threads: int) -> None:
+    """Execute the login workflow limiting concurrency to ``max_threads``."""
 
     client = LoginClient()
     login_response = client.authenticate(DEFAULT_LOGIN_REQUEST)
@@ -49,7 +62,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     if not search_values:
         return
 
-    semaphore = threading.Semaphore(args.threads)
+    semaphore = threading.Semaphore(max_threads)
     file_lock = threading.Lock()
 
     threads: list[threading.Thread] = []
@@ -90,6 +103,69 @@ def _parse_arguments(argv: Sequence[str] | None) -> argparse.Namespace:
     if args.threads < 1:
         parser.error("o parâmetro --threads deve ser um inteiro positivo")
     return args
+
+
+def _launch_interface() -> None:
+    """Display a basic GUI to configure and start the workflow."""
+
+    root = tk.Tk()
+    root.title("Configurar Execução")
+    root.resizable(False, False)
+
+    selected_threads: dict[str, int | None] = {"value": None}
+
+    frame = tk.Frame(root, padx=16, pady=16)
+    frame.pack(fill=tk.BOTH, expand=True)
+
+    tk.Label(
+        frame,
+        text="Quantidade de threads:",
+        anchor="w",
+    ).pack(fill=tk.X)
+
+    threads_var = tk.StringVar(value="1")
+    threads_spinbox = tk.Spinbox(
+        frame,
+        from_=1,
+        to=999,
+        textvariable=threads_var,
+        width=10,
+        justify="center",
+    )
+    threads_spinbox.pack(pady=(4, 12))
+
+    def on_start() -> None:
+        try:
+            threads = int(threads_var.get())
+            if threads < 1:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror(
+                "Valor inválido",
+                "Informe um número inteiro positivo de threads.",
+                parent=root,
+            )
+            return
+
+        selected_threads["value"] = threads
+        root.quit()
+
+    start_button = tk.Button(frame, text="Inicializar", command=on_start)
+    start_button.pack(fill=tk.X)
+
+    root.mainloop()
+    root.destroy()
+
+    threads_value = selected_threads["value"]
+    if threads_value is not None:
+        _run_workflow(threads_value)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        _launch_interface()
+    else:
+        main()
 
 
 def _run_search_workflow(
