@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import csv
 import json
 from pathlib import Path
 from html import unescape
@@ -13,7 +14,10 @@ from urllib.parse import parse_qsl, urlencode
 from app import DEFAULT_LOGIN_REQUEST, DEFAULT_OFFLINE_REQUEST, LoginClient, ServiceRequest
 
 
-SEARCH_VALUES_FILE = Path(__file__).resolve().parent / "search_values.txt"
+BASE_DIR = Path(__file__).resolve().parent
+SEARCH_VALUES_FILE = BASE_DIR / "search_values.txt"
+OUTPUT_DIR = BASE_DIR / "saida"
+OUTPUT_FILE = OUTPUT_DIR / "dados.csv"
 
 
 def main() -> None:
@@ -43,6 +47,7 @@ def main() -> None:
         print(benefit_response.status_code)
         hidden_inputs = _extract_hidden_inputs(benefit_response.body)
         print(json.dumps(hidden_inputs, ensure_ascii=False))
+        _append_hidden_inputs_to_csv(hidden_inputs, OUTPUT_FILE)
 
 
 def _load_search_values(path: Path) -> Iterable[str]:
@@ -233,6 +238,91 @@ def _extract_hidden_inputs(
     result: dict[str, object] = dict(parser.hidden_inputs)
     result["phones"] = parser.phones
     return result
+
+
+def _append_hidden_inputs_to_csv(
+    hidden_inputs: Mapping[str, object], output_file: Path
+) -> None:
+    """Persist hidden input data to ``output_file`` in CSV format."""
+
+    output_dir = output_file.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    processed_row = {
+        key: _stringify_csv_value(value) for key, value in hidden_inputs.items()
+    }
+
+    output_exists = output_file.exists() and output_file.stat().st_size > 0
+    if output_exists:
+        with output_file.open("r", encoding="utf-8", newline="") as existing_file:
+            reader = csv.reader(existing_file, delimiter=";")
+            try:
+                existing_header = next(reader)
+            except StopIteration:
+                existing_header = []
+        existing_fields = existing_header
+    else:
+        existing_fields = []
+
+    processed_fields = sorted(processed_row.keys())
+
+    if existing_fields:
+        existing_field_set = set(existing_fields)
+        new_fields = set(processed_fields) - existing_field_set
+    else:
+        existing_field_set = set()
+        new_fields = set()
+
+    if new_fields:
+        # Merge existing data with the new schema and rewrite the CSV file.
+        merged_fields = sorted(existing_field_set | set(processed_fields))
+        with output_file.open("r", encoding="utf-8", newline="") as existing_file:
+            reader = csv.DictReader(existing_file, delimiter=";")
+            existing_rows = list(reader)
+
+        with output_file.open("w", encoding="utf-8", newline="") as csv_file:
+            writer = csv.DictWriter(
+                csv_file, fieldnames=merged_fields, delimiter=";", extrasaction="ignore"
+            )
+            writer.writeheader()
+            for row in existing_rows:
+                writer.writerow({field: row.get(field, "") for field in merged_fields})
+            writer.writerow(
+                {field: processed_row.get(field, "") for field in merged_fields}
+            )
+        return
+
+    fieldnames = existing_fields if existing_fields else processed_fields
+    write_header = not existing_fields
+
+    with output_file.open("a", encoding="utf-8", newline="") as csv_file:
+        writer = csv.DictWriter(
+            csv_file, fieldnames=fieldnames, delimiter=";", extrasaction="ignore"
+        )
+        if write_header:
+            writer.writeheader()
+        writer.writerow({field: processed_row.get(field, "") for field in fieldnames})
+
+
+def _stringify_csv_value(value: object) -> str:
+    """Convert ``value`` into a string suitable for CSV serialization."""
+
+    if value is None:
+        return ""
+
+    if isinstance(value, str):
+        return value
+
+    if isinstance(value, (int, float)):
+        return str(value)
+
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(item) for item in value)
+
+    if isinstance(value, Mapping):
+        return json.dumps(value, ensure_ascii=False)
+
+    return str(value)
 
 
 if __name__ == "__main__":
