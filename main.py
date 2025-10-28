@@ -345,32 +345,95 @@ def _process_bank_directories(
     if not banks:
         return
 
+    person_payload = _prepare_person_payload(response_body)
+    serialized_person = _serialize_json_block(person_payload)
+
     with file_lock:
+        OUTPUT_BANKS_DIR.mkdir(parents=True, exist_ok=True)
         for bank in banks:
             label = bank.get("label")
             if not isinstance(label, str) or not label.strip():
                 continue
 
-            directory_name = _sanitize_bank_directory_name(label)
-            bank_directory = OUTPUT_BANKS_DIR / directory_name
+            bank_directory = OUTPUT_BANKS_DIR / label.strip()
             bank_directory.mkdir(parents=True, exist_ok=True)
 
             dados_path = bank_directory / "dados.txt"
-            dados_payload = json.dumps(
-                bank,
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-                default=_stringify_unknown_json_value,
-            )
-            dados_path.write_text(f"{dados_payload}\n", encoding="utf-8")
+            _append_text_block(dados_path, serialized_person)
 
             numeros_path = bank_directory / "numeros.txt"
             numbers = _collect_numeric_values(bank)
-            numeros_content = "\n".join(numbers)
             if numbers:
-                numeros_content += "\n"
-            numeros_path.write_text(numeros_content, encoding="utf-8")
+                _append_numbers(numeros_path, numbers)
+            else:
+                numeros_path.touch(exist_ok=True)
+
+
+def _prepare_person_payload(
+    response_body: Mapping[str, object] | Sequence[object] | str,
+) -> object:
+    """Return a JSON-serializable payload representing the consultation data."""
+
+    parsed_body: object
+    if isinstance(response_body, str):
+        try:
+            parsed_body = json.loads(response_body)
+        except json.JSONDecodeError:
+            parsed_body = response_body
+    else:
+        parsed_body = response_body
+
+    return _make_json_serializable(parsed_body)
+
+
+def _serialize_json_block(data: object) -> str:
+    """Serialize ``data`` into a human-readable string representation."""
+
+    if isinstance(data, str):
+        return data
+
+    indent: int | None
+    if isinstance(data, Sequence) and not isinstance(data, (str, bytes, bytearray)):
+        indent = 2
+    elif isinstance(data, Mapping):
+        indent = 2
+    else:
+        indent = None
+
+    try:
+        return json.dumps(
+            data,
+            ensure_ascii=False,
+            indent=indent,
+            sort_keys=True,
+        )
+    except TypeError:
+        return str(data)
+
+
+def _append_text_block(path: Path, content: str) -> None:
+    """Append ``content`` to ``path`` ensuring entries are separated by newlines."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    prefix = ""
+    if path.exists() and path.stat().st_size > 0:
+        prefix = "\n"
+
+    with path.open("a", encoding="utf-8") as file:
+        if prefix:
+            file.write(prefix)
+        file.write(content)
+        if not content.endswith("\n"):
+            file.write("\n")
+
+
+def _append_numbers(path: Path, numbers: Sequence[str]) -> None:
+    """Append each value in ``numbers`` to ``path`` on its own line."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as file:
+        for number in numbers:
+            file.write(f"{number}\n")
 
 
 def _extract_banks_from_response(
@@ -466,15 +529,6 @@ def _normalize_bank_entry(candidate: Mapping[str, object]) -> dict[str, object]:
     label = candidate.get("label")
     label_text = label if isinstance(label, str) else str(label)
     return {"label": label_text}
-
-
-def _sanitize_bank_directory_name(label: str) -> str:
-    """Return a filesystem-safe directory name derived from ``label``."""
-
-    sanitized = label.strip().replace("/", "-").replace("\\", "-")
-    sanitized = re.sub(r"\s+", " ", sanitized, flags=re.UNICODE)
-    sanitized = sanitized or "banco"
-    return sanitized
 
 
 def _collect_numeric_values(obj: object) -> list[str]:
