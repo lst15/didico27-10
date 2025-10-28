@@ -572,9 +572,44 @@ def _append_bank_numbers(bank_directory: Path, numbers: Sequence[str]) -> None:
     """Append ``numbers`` to the ``numeros.txt`` file, one per line."""
 
     numbers_file = bank_directory / "numeros.txt"
+    fixed_numbers_file = bank_directory / "numeros_fixos.txt"
+
+    fixed_numbers: list[str] = []
+
     with numbers_file.open("a", encoding="utf-8") as output:
         for number in numbers:
             output.write(f"{number}\n")
+            if _is_fixed_line_number(number):
+                fixed_numbers.append(number)
+
+    if fixed_numbers:
+        with fixed_numbers_file.open("a", encoding="utf-8") as fixed_output:
+            for number in fixed_numbers:
+                fixed_output.write(f"{number}\n")
+
+
+def _is_fixed_line_number(number: str) -> bool:
+    """Return ``True`` when ``number`` appears to represent a landline phone."""
+
+    digits = re.sub(r"\D", "", number)
+    if not digits:
+        return False
+
+    # Remove trunk prefix used in some formatted numbers (e.g., 0XXDDD...)
+    if digits.startswith("0") and len(digits) > 10:
+        digits = digits[1:]
+
+    if len(digits) >= 10:
+        subscriber = digits[-8:]
+    elif len(digits) == 8:
+        subscriber = digits
+    else:
+        return False
+
+    if len(subscriber) != 8:
+        return False
+
+    return subscriber[0] in {"2", "3", "4", "5"}
 
 
 if __name__ == "__main__":
