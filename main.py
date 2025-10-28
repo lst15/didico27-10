@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence as ABCSequence
 import csv
 import json
 from pathlib import Path
 import re
 import threading
+from dataclasses import dataclass
 from functools import lru_cache
 from html import unescape
 from html.parser import HTMLParser
@@ -102,6 +103,11 @@ def _run_search_workflow(
             print(f"Busca realizada: {search_value}")
             print(response.status_code)
             print(response.body)
+
+            bank_records = _extract_bank_consultation_records(response.body)
+            if bank_records:
+                with file_lock:
+                    _persist_bank_consultations(bank_records)
 
             nb_identifier = _extract_nb_identifier(response.body)
             if nb_identifier is None:
@@ -325,12 +331,232 @@ def _append_hidden_inputs_to_csv(
 
     _write_csv_row_with_dynamic_schema(processed_row, output_file)
 
-    bank_code = processed_row.get("banco_codigo", "").strip()
+
+
+@dataclass(frozen=True)
+class _BankConsultationRecord:
+    """Container for data grouped by bank returned in a consultation."""
+
+    label: str
+    person_entries: list[object]
+    numbers: list[str]
+    raw_data: Mapping[str, object]
+
+
+def _extract_bank_consultation_records(
+    response_body: Mapping[str, object] | str,
+) -> list[_BankConsultationRecord]:
+    """Return bank records present in the consultation ``response_body``."""
+
+    if not isinstance(response_body, Mapping):
+        return []
+
+    records: list[_BankConsultationRecord] = []
+    for candidate in _iter_bank_candidates(response_body):
+        label = _coerce_bank_label(candidate)
+        if not label:
+            continue
+
+        person_entries = _collect_person_entries(candidate)
+        numbers = _collect_number_entries(candidate)
+
+        records.append(
+            _BankConsultationRecord(
+                label=label,
+                person_entries=person_entries,
+                numbers=numbers,
+                raw_data=dict(candidate),
+            )
+        )
+
+    return records
+
+
+def _persist_bank_consultations(records: Sequence[_BankConsultationRecord]) -> None:
+    """Create per-bank folders and append consultation data to the expected files."""
+
+    for record in records:
+        bank_dir_name = record.label.replace("/", "-").replace("\\", "-")
+        bank_dir = OUTPUT_BANKS_DIR / bank_dir_name
+        bank_dir.mkdir(parents=True, exist_ok=True)
+
+        dados_file = bank_dir / "dados.txt"
+        numeros_file = bank_dir / "numeros.txt"
+
+        entries = record.person_entries or [record.raw_data]
+
+        with dados_file.open("a", encoding="utf-8") as dados:
+            for entry in entries:
+                serialized = _serialize_person_entry(entry)
+                if serialized:
+                    dados.write(serialized)
+                    dados.write("\n")
+
+        with numeros_file.open("a", encoding="utf-8") as numeros:
+            for number in record.numbers:
+                numeros.write(f"{number}\n")
+
+
+def _serialize_person_entry(entry: object) -> str:
+    """Serialize a consultation entry for storage in ``dados.txt``."""
+
+    if entry is None:
+        return ""
+
+    if isinstance(entry, str):
+        return entry.strip()
+
+    try:
+        return json.dumps(entry, ensure_ascii=False, default=str)
+    except TypeError:
+        return str(entry)
+
+
+def _iter_bank_candidates(obj: object) -> Iterable[Mapping[str, object]]:
+    """Yield mappings that appear to represent banks in the response payload."""
+
+    if isinstance(obj, Mapping):
+        if _looks_like_bank_candidate(obj):
+            yield obj
+        for value in obj.values():
+            yield from _iter_bank_candidates(value)
+        return
+
+    if isinstance(obj, ABCSequence) and not isinstance(obj, (str, bytes, bytearray)):
+        for item in obj:
+            yield from _iter_bank_candidates(item)
+
+
+def _looks_like_bank_candidate(candidate: Mapping[str, object]) -> bool:
+    """Determine whether ``candidate`` likely corresponds to a bank entry."""
+
+    label = candidate.get("label")
+    if not isinstance(label, str) or not label.strip():
+        return False
+
+    if any(
+        key in candidate
+        for key in ("value", "codigo", "code", "bank", "banco", "bank_code")
+    ):
+        return True
+
+    return any("numero" in key.lower() for key in candidate.keys())
+
+
+def _coerce_bank_label(candidate: Mapping[str, object]) -> str | None:
+    """Return the label for ``candidate`` or ``None`` if unavailable."""
+
+    label = candidate.get("label")
+    if isinstance(label, str) and label.strip():
+        return label.strip()
+
+    bank_code = _extract_bank_code(candidate)
     if bank_code:
         bank_name = _lookup_bank_name(bank_code)
-        bank_filename = _sanitize_bank_filename(bank_name) if bank_name else bank_code
-        bank_output_file = OUTPUT_BANKS_DIR / f"{bank_filename}.txt"
-        _write_csv_row_with_dynamic_schema(processed_row, bank_output_file)
+        if bank_name:
+            return bank_name
+        return bank_code
+    return None
+
+
+def _extract_bank_code(candidate: Mapping[str, object]) -> str | None:
+    """Extract a bank code from ``candidate`` when available."""
+
+    for key in ("value", "codigo", "code", "bank_code", "banco"):
+        value = candidate.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, (int, float)):
+            return str(value)
+    return None
+
+
+def _collect_person_entries(candidate: Mapping[str, object]) -> list[object]:
+    """Collect person data associated with a bank entry."""
+
+    entries: list[object] = []
+    for key, value in candidate.items():
+        lowered = key.lower()
+        if any(token in lowered for token in ("pessoa", "beneficiario", "titular", "cliente")):
+            entries.extend(_normalize_person_value(value))
+        elif "dados" in lowered:
+            normalized = _normalize_person_value(value)
+            if normalized:
+                entries.extend(normalized)
+        elif isinstance(value, Mapping) or (
+            isinstance(value, ABCSequence) and not isinstance(value, (str, bytes, bytearray))
+        ):
+            entries.extend(_collect_person_entries(value))
+    return entries
+
+
+def _normalize_person_value(value: object) -> list[object]:
+    """Normalize person-related values into a list of serializable entries."""
+
+    if isinstance(value, Mapping):
+        return [dict(value)]
+
+    if isinstance(value, ABCSequence) and not isinstance(value, (str, bytes, bytearray)):
+        normalized: list[object] = []
+        for item in value:
+            if isinstance(item, Mapping):
+                normalized.append(dict(item))
+        return normalized
+
+    return []
+
+
+def _collect_number_entries(candidate: Mapping[str, object]) -> list[str]:
+    """Collect number values related to the consultation bank entry."""
+
+    numbers: list[str] = []
+    seen: set[str] = set()
+
+    for number in _extract_numbers_from_object(candidate):
+        normalized = number.strip()
+        if normalized and normalized not in seen:
+            numbers.append(normalized)
+            seen.add(normalized)
+
+    return numbers
+
+
+def _extract_numbers_from_object(obj: object) -> Iterable[str]:
+    """Yield numeric strings from ``obj`` based on contextual keys."""
+
+    if isinstance(obj, Mapping):
+        for key, value in obj.items():
+            lowered = key.lower()
+            if any(token in lowered for token in ("numero", "número", "nb")):
+                yield from _flatten_numbers(value)
+            elif isinstance(value, Mapping) or (
+                isinstance(value, ABCSequence) and not isinstance(value, (str, bytes, bytearray))
+            ):
+                yield from _extract_numbers_from_object(value)
+    elif isinstance(obj, ABCSequence) and not isinstance(obj, (str, bytes, bytearray)):
+        for item in obj:
+            yield from _extract_numbers_from_object(item)
+
+
+def _flatten_numbers(value: object) -> Iterable[str]:
+    """Return an iterable of stringified numbers from ``value``."""
+
+    if isinstance(value, str):
+        yield value
+        return
+
+    if isinstance(value, (int, float)):
+        yield str(value)
+        return
+
+    if isinstance(value, Mapping):
+        for nested in value.values():
+            yield from _flatten_numbers(nested)
+        return
+
+    if isinstance(value, ABCSequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            yield from _flatten_numbers(item)
 
 
 def _lookup_bank_name(bank_code: str) -> str | None:
@@ -430,14 +656,6 @@ def _clean_bank_code(code: str) -> str | None:
 
     digits = re.sub(r"\D", "", code)
     return digits.zfill(3) if digits else None
-
-
-def _sanitize_bank_filename(bank_name: str) -> str:
-    """Return a filesystem-friendly filename derived from ``bank_name``."""
-
-    sanitized = re.sub(r"[^\w]+", "_", bank_name, flags=re.UNICODE)
-    sanitized = sanitized.strip("_")
-    return sanitized or "banco"
 
 
 def _write_csv_row_with_dynamic_schema(
