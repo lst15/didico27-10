@@ -25,6 +25,15 @@ OUTPUT_FILE = OUTPUT_DIR / "dados.txt"
 OUTPUT_BANKS_DIR = OUTPUT_DIR / "bancos"
 BANKS_FILE = BASE_DIR / "bancos.txt"
 
+_PREFERRED_DADOS_FIELDS = (
+    "cpf",
+    "nome",
+    "data_nascimento",
+    "beneficio",
+    "banco_agencia",
+    "banco_conta",
+)
+
 
 def main(argv: Sequence[str] | None = None) -> None:
     """Execute the configured login request and print its outcome."""
@@ -444,55 +453,51 @@ def _write_csv_row_with_dynamic_schema(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_exists = output_file.exists() and output_file.stat().st_size > 0
+    existing_rows: list[dict[str, str]] = []
+    existing_fields: list[str] = []
+
     if output_exists:
         with output_file.open("r", encoding="utf-8", newline="") as existing_file:
-            reader = csv.reader(existing_file, delimiter="|")
-            try:
-                existing_header = next(reader)
-            except StopIteration:
-                existing_header = []
-        existing_fields = existing_header
-    else:
-        existing_fields = []
-
-    processed_fields = sorted(row_data.keys())
-
-    if existing_fields:
-        existing_field_set = set(existing_fields)
-        new_fields = set(processed_fields) - existing_field_set
-    else:
-        existing_field_set = set()
-        new_fields = set()
-
-    if new_fields:
-        # Merge existing data with the new schema and rewrite the output file.
-        merged_fields = sorted(existing_field_set | set(processed_fields))
-        with output_file.open("r", encoding="utf-8", newline="") as existing_file:
             reader = csv.DictReader(existing_file, delimiter="|")
+            existing_fields = reader.fieldnames or []
             existing_rows = list(reader)
 
+    target_fields = _order_dados_fields(existing_fields, row_data.keys())
+    needs_rewrite = (not output_exists) or (existing_fields != target_fields)
+
+    if needs_rewrite:
         with output_file.open("w", encoding="utf-8", newline="") as csv_file:
             writer = csv.DictWriter(
-                csv_file, fieldnames=merged_fields, delimiter="|", extrasaction="ignore"
+                csv_file, fieldnames=target_fields, delimiter="|", extrasaction="ignore"
             )
             writer.writeheader()
             for existing_row in existing_rows:
-                writer.writerow(
-                    {field: existing_row.get(field, "") for field in merged_fields}
-                )
-            writer.writerow({field: row_data.get(field, "") for field in merged_fields})
+                writer.writerow({field: existing_row.get(field, "") for field in target_fields})
+            writer.writerow({field: row_data.get(field, "") for field in target_fields})
         return
-
-    fieldnames = existing_fields if existing_fields else processed_fields
-    write_header = not existing_fields
 
     with output_file.open("a", encoding="utf-8", newline="") as csv_file:
         writer = csv.DictWriter(
-            csv_file, fieldnames=fieldnames, delimiter="|", extrasaction="ignore"
+            csv_file, fieldnames=existing_fields, delimiter="|", extrasaction="ignore"
         )
-        if write_header:
-            writer.writeheader()
-        writer.writerow({field: row_data.get(field, "") for field in fieldnames})
+        writer.writerow({field: row_data.get(field, "") for field in existing_fields})
+
+
+def _order_dados_fields(
+    existing_fields: Sequence[str], new_fields: Iterable[str]
+) -> list[str]:
+    """Return the desired ``dados.txt`` field order combining existing and new fields."""
+
+    combined_fields = set(existing_fields) | set(new_fields)
+    ordered_fields: list[str] = []
+
+    for field in _PREFERRED_DADOS_FIELDS:
+        if field in combined_fields:
+            ordered_fields.append(field)
+
+    remaining_fields = sorted(combined_fields - set(ordered_fields))
+    ordered_fields.extend(remaining_fields)
+    return ordered_fields
 
 
 def _stringify_csv_value(value: object) -> str:
