@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import argparse
+import queue
+import threading
+from collections.abc import Mapping, Sequence
 import csv
 import json
 from pathlib import Path
@@ -24,34 +27,111 @@ OUTPUT_BANKS_DIR = OUTPUT_DIR / "bancos"
 BANKS_FILE = BASE_DIR / "bancos.txt"
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     """Execute the configured login request and print its outcome."""
 
-    client = LoginClient()
-    login_response = client.authenticate(DEFAULT_LOGIN_REQUEST)
-    print(login_response.status_code)
-    print(login_response.body)
+    args = _parse_args(argv)
+    max_threads = max(1, args.threads)
 
-    for search_value in _load_search_values(SEARCH_VALUES_FILE):
-        offline_request = _build_offline_request(DEFAULT_OFFLINE_REQUEST, search_value)
-        response = client.perform_authenticated(offline_request)
-        print(f"Busca realizada: {search_value}")
-        print(response.status_code)
-        print(response.body)
+    search_values = list(_load_search_values(SEARCH_VALUES_FILE))
+    effective_threads = min(max_threads, len(search_values)) if search_values else 1
 
-        nb_identifier = _extract_nb_identifier(response.body)
-        if nb_identifier is None:
-            continue
+    semaphore = threading.Semaphore(effective_threads)
+    csv_lock = threading.Lock()
+    print_lock = threading.Lock()
+    client_pool: queue.SimpleQueue[LoginClient] = queue.SimpleQueue()
 
-        benefit_request = _build_benefit_request(
-            DEFAULT_OFFLINE_REQUEST, nb_identifier
+    first_login_response = None
+    for _ in range(effective_threads):
+        worker_client = LoginClient()
+        login_response = worker_client.authenticate(DEFAULT_LOGIN_REQUEST)
+        if first_login_response is None:
+            first_login_response = login_response
+        client_pool.put(worker_client)
+
+    if first_login_response is not None:
+        print(first_login_response.status_code)
+        print(first_login_response.body)
+
+    if not search_values:
+        return
+
+    threads: list[threading.Thread] = []
+
+    for search_value in search_values:
+        thread = threading.Thread(
+            target=_process_search_value,
+            args=(
+                search_value,
+                semaphore,
+                client_pool,
+                csv_lock,
+                print_lock,
+            ),
+            daemon=False,
         )
-        benefit_response = client.perform_authenticated(benefit_request)
-        print(f"Requisição por benefício realizada com NB: {nb_identifier}")
-        print(benefit_response.status_code)
-        hidden_inputs = _extract_hidden_inputs(benefit_response.body)
-        print(json.dumps(hidden_inputs, ensure_ascii=False))
-        _append_hidden_inputs_to_csv(hidden_inputs, OUTPUT_FILE)
+        thread.start()
+        threads.append(thread)
+
+    for thread in threads:
+        thread.join()
+
+
+def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
+    """Parse command-line arguments used to configure the execution."""
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=1,
+        help="Quantidade máxima de threads simultâneas utilizadas durante as buscas.",
+    )
+    return parser.parse_args(list(argv) if argv is not None else None)
+
+
+def _process_search_value(
+    search_value: str,
+    semaphore: threading.Semaphore,
+    client_pool: queue.SimpleQueue[LoginClient],
+    csv_lock: threading.Lock,
+    print_lock: threading.Lock,
+) -> None:
+    """Execute the workflow for an individual ``search_value`` respecting ``semaphore``."""
+
+    with semaphore:
+        client = client_pool.get()
+        try:
+            offline_request = _build_offline_request(
+                DEFAULT_OFFLINE_REQUEST, search_value
+            )
+            response = client.perform_authenticated(offline_request)
+
+            with print_lock:
+                print(f"Busca realizada: {search_value}")
+                print(response.status_code)
+                print(response.body)
+
+            nb_identifier = _extract_nb_identifier(response.body)
+            if nb_identifier is None:
+                return
+
+            benefit_request = _build_benefit_request(
+                DEFAULT_OFFLINE_REQUEST, nb_identifier
+            )
+            benefit_response = client.perform_authenticated(benefit_request)
+
+            hidden_inputs = _extract_hidden_inputs(benefit_response.body)
+
+            with print_lock:
+                print(f"Requisição por benefício realizada com NB: {nb_identifier}")
+                print(benefit_response.status_code)
+                print(json.dumps(hidden_inputs, ensure_ascii=False))
+
+            with csv_lock:
+                _append_hidden_inputs_to_csv(hidden_inputs, OUTPUT_FILE)
+        finally:
+            client_pool.put(client)
 
 
 def _load_search_values(path: Path) -> Iterable[str]:
