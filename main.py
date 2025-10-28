@@ -280,17 +280,58 @@ def _lookup_bank_name(bank_code: str) -> str | None:
 def _load_bank_mapping() -> dict[str, str]:
     """Load the bank code/name mapping from ``BANKS_FILE``."""
 
+    if not BANKS_FILE.exists():
+        return {}
+
+    try:
+        content = BANKS_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+
+    content = content.strip()
+    if not content:
+        return {}
+
+    json_mapping = _try_parse_bank_json(content)
+    if json_mapping:
+        return json_mapping
+
+    mapping: dict[str, str] = {}
+    for line in content.splitlines():
+        code, name = _parse_bank_line(line)
+        if code and name:
+            mapping[code] = name
+
+    return mapping
+
+
+def _try_parse_bank_json(content: str) -> dict[str, str]:
+    """Attempt to parse ``content`` as JSON bank mappings."""
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return {}
+
     mapping: dict[str, str] = {}
 
-    if not BANKS_FILE.exists():
-        return mapping
+    def _consume(obj: object) -> None:
+        if isinstance(obj, list):
+            for item in obj:
+                _consume(item)
+            return
 
-    with BANKS_FILE.open(encoding="utf-8") as banks_file:
-        for line in banks_file:
-            code, name = _parse_bank_line(line)
-            if code and name:
-                mapping[code] = name
+        if isinstance(obj, Mapping):
+            code = obj.get("value") or obj.get("code")
+            name = obj.get("label") or obj.get("name")
+            if isinstance(code, str) and isinstance(name, str):
+                normalized_code = _clean_bank_code(code)
+                if normalized_code and name.strip():
+                    mapping[normalized_code] = name.strip()
+            for value in obj.values():
+                _consume(value)
 
+    _consume(data)
     return mapping
 
 
