@@ -6,6 +6,7 @@ from collections.abc import Mapping
 import json
 from pathlib import Path
 import re
+from html import unescape
 from typing import Iterable
 from urllib.parse import parse_qsl, urlencode
 
@@ -157,12 +158,19 @@ _VALUE_ATTRIBUTE_PATTERN = re.compile(
     r"value\s*=\s*['\"]([^'\"]*)['\"]", re.IGNORECASE
 )
 
+_PHONE_SPAN_PATTERN = re.compile(
+    r"<span\\b[^>]*class\\s*=\\s*['\"]([^'\"]*\\bphone_with_ddd\\b[^'\"]*)['\"][^>]*>(.*?)</span>",
+    re.IGNORECASE | re.DOTALL,
+)
+_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
 
-def _extract_hidden_inputs(response_body: Mapping[str, object] | str) -> dict[str, str]:
+def _extract_hidden_inputs(
+    response_body: Mapping[str, object] | str,
+) -> dict[str, object]:
     """Return hidden input fields mapped as name/value pairs from an HTML response."""
     response_body =  response_body['html']
     if not isinstance(response_body, str):
-        return {}
+        return {"phones": []}
 
     hidden_inputs: dict[str, str] = {}
     for match in _HIDDEN_INPUT_PATTERN.finditer(response_body):
@@ -173,7 +181,17 @@ def _extract_hidden_inputs(response_body: Mapping[str, object] | str) -> dict[st
             continue
         hidden_inputs[name_match.group(1)] = value_match.group(1)
 
-    return hidden_inputs
+    phones: list[str] = []
+    for span_match in _PHONE_SPAN_PATTERN.finditer(response_body):
+        content = span_match.group(2)
+        text = _HTML_TAG_PATTERN.sub("", content)
+        text = unescape(text).strip()
+        if text:
+            phones.append(text)
+
+    result: dict[str, object] = dict(hidden_inputs)
+    result["phones"] = phones
+    return result
 
 
 if __name__ == "__main__":
