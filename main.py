@@ -11,7 +11,7 @@ import argparse
 import sys
 import tkinter as tk
 from tkinter import messagebox
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence as SequenceCollection
 import csv
 import json
 from pathlib import Path
@@ -23,7 +23,13 @@ from html.parser import HTMLParser
 from typing import Iterable, Sequence
 from urllib.parse import parse_qsl, urlencode
 
-from app import DEFAULT_LOGIN_REQUEST, DEFAULT_OFFLINE_REQUEST, LoginClient, ServiceRequest
+from app import (
+    DEFAULT_LOGIN_REQUEST,
+    DEFAULT_OFFLINE_REQUEST,
+    LoginClient,
+    LoginRequest,
+    ServiceRequest,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -54,9 +60,13 @@ def _run_workflow(max_threads: int) -> None:
     """Execute the login workflow limiting concurrency to ``max_threads``."""
 
     client = LoginClient()
-    login_response = client.authenticate(DEFAULT_LOGIN_REQUEST)
+    login_request = DEFAULT_LOGIN_REQUEST
+    login_response = client.authenticate(login_request)
     print(login_response.status_code)
     print(login_response.body)
+
+    if _response_indicates_logout(login_response.body):
+        login_request = _prompt_login_until_success(client, login_request)
 
     search_values = list(_load_search_values(SEARCH_VALUES_FILE))
     if not search_values:
@@ -65,18 +75,35 @@ def _run_workflow(max_threads: int) -> None:
     semaphore = threading.Semaphore(max_threads)
     file_lock = threading.Lock()
 
-    threads: list[threading.Thread] = []
-    for search_value in search_values:
-        thread = threading.Thread(
-            target=_run_search_workflow,
-            args=(search_value, client, semaphore, file_lock),
-            name=f"cpf-search-{search_value}",
-        )
-        thread.start()
-        threads.append(thread)
+    remaining_values = list(search_values)
 
-    for thread in threads:
-        thread.join()
+    while remaining_values:
+        session_state = _SessionState()
+        threads: list[threading.Thread] = []
+        for position, search_value in enumerate(remaining_values):
+            thread = threading.Thread(
+                target=_run_search_workflow,
+                args=(
+                    position,
+                    search_value,
+                    client,
+                    semaphore,
+                    file_lock,
+                    session_state,
+                ),
+                name=f"cpf-search-{search_value}",
+            )
+            thread.start()
+            threads.append(thread)
+
+        for thread in threads:
+            thread.join()
+
+        if session_state.session_expired:
+            remaining_values = session_state.consume_failed_values()
+            login_request = _prompt_login_until_success(client, login_request)
+        else:
+            break
 
 
 def _parse_arguments(argv: Sequence[str] | None) -> argparse.Namespace:
@@ -162,17 +189,27 @@ def _launch_interface() -> None:
 
 
 def _run_search_workflow(
+    position: int,
     search_value: str,
     client: LoginClient,
     semaphore: threading.Semaphore,
     file_lock: threading.Lock,
+    session_state: "_SessionState",
 ) -> None:
     """Execute the workflow for a single ``search_value`` using ``client``."""
 
     hidden_inputs: Mapping[str, object] | None = None
 
+    if session_state.session_expired:
+        session_state.register_failed_value(position, search_value)
+        return
+
     try:
         with semaphore:
+            if session_state.session_expired:
+                session_state.register_failed_value(position, search_value)
+                return
+
             offline_request = _build_offline_request(
                 DEFAULT_OFFLINE_REQUEST, search_value
             )
@@ -181,8 +218,17 @@ def _run_search_workflow(
             print(response.status_code)
             print(response.body)
 
+            if _response_indicates_logout(response.body):
+                session_state.mark_session_expired()
+                session_state.register_failed_value(position, search_value)
+                return
+
             nb_identifier = _extract_nb_identifier(response.body)
             if nb_identifier is None:
+                return
+
+            if session_state.session_expired:
+                session_state.register_failed_value(position, search_value)
                 return
 
             benefit_request = _build_benefit_request(
@@ -193,6 +239,11 @@ def _run_search_workflow(
             print(benefit_response.status_code)
             hidden_inputs = _extract_hidden_inputs(benefit_response.body)
             print(json.dumps(hidden_inputs, ensure_ascii=False))
+
+            if _response_indicates_logout(benefit_response.body):
+                session_state.mark_session_expired()
+                session_state.register_failed_value(position, search_value)
+                return
     except Exception as exc:  # pragma: no cover - defensive logging only
         print(f"Erro ao processar {search_value}: {exc}")
         return
@@ -303,6 +354,150 @@ def _extract_nb_identifier(response_body: Mapping[str, object] | str) -> str | N
         return None
 
     return candidate.split()[0]
+
+
+def _response_indicates_logout(response_body: Mapping[str, object] | str) -> bool:
+    """Return ``True`` when the response indicates the session has expired."""
+
+    marker = "acesso/recuperar_senha"
+    if isinstance(response_body, str):
+        return marker in response_body
+
+    if isinstance(response_body, Mapping):
+        def _contains_marker(value: object) -> bool:
+            if isinstance(value, str):
+                return marker in value
+            if isinstance(value, Mapping):
+                return any(_contains_marker(inner) for inner in value.values())
+            if isinstance(value, SequenceCollection) and not isinstance(
+                value, (str, bytes, bytearray)
+            ):
+                return any(_contains_marker(item) for item in value)
+            return False
+
+        return any(_contains_marker(value) for value in response_body.values())
+    return False
+
+
+def _prompt_login_until_success(
+    client: LoginClient, current_request: LoginRequest
+) -> LoginRequest:
+    """Prompt the user for credentials until a login attempt succeeds."""
+
+    while True:
+        credentials = _prompt_for_credentials(current_request.credentials)
+        if not credentials:
+            continue
+
+        next_request = current_request.with_overrides(credentials=credentials)
+        login_response = client.authenticate(next_request)
+        print(login_response.status_code)
+        print(login_response.body)
+
+        if _response_indicates_logout(login_response.body):
+            _show_error_dialog(
+                "Falha no login",
+                "Não foi possível autenticar com as credenciais fornecidas.",
+            )
+            current_request = next_request
+            continue
+
+        return next_request
+
+
+def _prompt_for_credentials(current_credentials: Mapping[str, str]) -> dict[str, str]:
+    """Display a dialog requesting login credentials from the user."""
+
+    root = tk.Tk()
+    root.title("Sessão expirada - informe suas credenciais")
+    root.resizable(False, False)
+
+    result: dict[str, str] = {}
+
+    frame = tk.Frame(root, padx=16, pady=16)
+    frame.pack(fill=tk.BOTH, expand=True)
+
+    login_var = tk.StringVar(value=current_credentials.get("login", ""))
+    senha_var = tk.StringVar(value=current_credentials.get("senha", ""))
+
+    tk.Label(frame, text="Login:", anchor="w").pack(fill=tk.X)
+    login_entry = tk.Entry(frame, textvariable=login_var)
+    login_entry.pack(fill=tk.X, pady=(0, 8))
+
+    tk.Label(frame, text="Senha:", anchor="w").pack(fill=tk.X)
+    senha_entry = tk.Entry(frame, textvariable=senha_var, show="*")
+    senha_entry.pack(fill=tk.X, pady=(0, 8))
+
+    def submit() -> None:
+        login_value = login_var.get().strip()
+        senha_value = senha_var.get()
+        if not login_value or not senha_value:
+            messagebox.showerror(
+                "Dados obrigatórios",
+                "Informe o login e a senha para continuar.",
+                parent=root,
+            )
+            return
+        result["login"] = login_value
+        result["senha"] = senha_value
+        root.quit()
+
+    def on_close() -> None:
+        result.clear()
+        root.quit()
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
+
+    submit_button = tk.Button(frame, text="Entrar", command=submit)
+    submit_button.pack(fill=tk.X)
+
+    login_entry.focus_set()
+    root.mainloop()
+    root.destroy()
+
+    return result
+
+
+def _show_error_dialog(title: str, message: str) -> None:
+    """Display an error dialog decoupled from other Tk windows."""
+
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showerror(title, message, parent=root)
+    root.destroy()
+
+
+class _SessionState:
+    """Keep track of session expiration state across threads."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._session_expired = False
+        self._failed_entries: list[tuple[int, str]] = []
+        self._failed_positions: set[int] = set()
+
+    @property
+    def session_expired(self) -> bool:
+        with self._lock:
+            return self._session_expired
+
+    def mark_session_expired(self) -> None:
+        with self._lock:
+            self._session_expired = True
+
+    def register_failed_value(self, position: int, search_value: str) -> None:
+        with self._lock:
+            if position not in self._failed_positions:
+                self._failed_entries.append((position, search_value))
+                self._failed_positions.add(position)
+
+    def consume_failed_values(self) -> list[str]:
+        with self._lock:
+            ordered = sorted(self._failed_entries, key=lambda item: item[0])
+            values = [value for _, value in ordered]
+            self._failed_entries.clear()
+            self._failed_positions.clear()
+            return values
 
 
 class _HiddenInputParser(HTMLParser):
