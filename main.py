@@ -11,6 +11,7 @@ import argparse
 import sys
 import tkinter as tk
 from tkinter import messagebox
+from getpass import getpass
 from collections.abc import Mapping, Sequence as SequenceCollection
 import csv
 import json
@@ -420,6 +421,17 @@ def _prompt_login_until_success(
 def _prompt_for_credentials(current_credentials: Mapping[str, str]) -> dict[str, str]:
     """Display a dialog requesting login credentials from the user."""
 
+    try:
+        return _prompt_for_credentials_gui(current_credentials)
+    except tk.TclError:
+        return _prompt_for_credentials_console(current_credentials)
+
+
+def _prompt_for_credentials_gui(
+    current_credentials: Mapping[str, str]
+) -> dict[str, str]:
+    """Display a Tk dialog requesting login credentials from the user."""
+
     root = tk.Tk()
     root.title("Sessão expirada - informe suas credenciais")
     root.resizable(False, False)
@@ -470,13 +482,46 @@ def _prompt_for_credentials(current_credentials: Mapping[str, str]) -> dict[str,
     return result
 
 
+def _prompt_for_credentials_console(
+    current_credentials: Mapping[str, str]
+) -> dict[str, str]:
+    """Fallback to console input when no graphical environment is available."""
+
+    print("Sessão expirada - informe suas credenciais pelo terminal.")
+
+    default_login = current_credentials.get("login", "")
+
+    while True:
+        try:
+            login_prompt = "Login"
+            if default_login:
+                login_prompt += f" [{default_login}]"
+            login_value = input(f"{login_prompt}: ").strip()
+            if not login_value and default_login:
+                login_value = default_login
+
+            senha_value = getpass("Senha: ")
+        except (EOFError, KeyboardInterrupt):
+            print("\nEntrada cancelada. Tente novamente para continuar a execução.")
+            continue
+
+        if not login_value or not senha_value:
+            print("É necessário informar login e senha válidos.")
+            continue
+
+        return {"login": login_value, "senha": senha_value}
+
+
 def _show_error_dialog(title: str, message: str) -> None:
     """Display an error dialog decoupled from other Tk windows."""
 
-    root = tk.Tk()
-    root.withdraw()
-    messagebox.showerror(title, message, parent=root)
-    root.destroy()
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(title, message, parent=root)
+        root.destroy()
+    except tk.TclError:
+        print(f"[{title}] {message}")
 
 
 class _SessionState:
