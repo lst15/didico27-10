@@ -356,17 +356,29 @@ def _extract_nb_identifier(response_body: Mapping[str, object] | str) -> str | N
     return candidate.split()[0]
 
 
+_SESSION_EXPIRATION_MARKERS = (
+    "acesso/recuperar_senha",
+    "Sem limite!",
+)
+_SESSION_EXPIRATION_MARKERS_CASEFOLDED = tuple(
+    marker.casefold() for marker in _SESSION_EXPIRATION_MARKERS
+)
+
+
 def _response_indicates_logout(response_body: Mapping[str, object] | str) -> bool:
     """Return ``True`` when the response indicates the session has expired."""
 
-    marker = "acesso/recuperar_senha"
+    def _contains_marker_in_string(value: str) -> bool:
+        normalized = value.casefold()
+        return any(marker in normalized for marker in _SESSION_EXPIRATION_MARKERS_CASEFOLDED)
+
     if isinstance(response_body, str):
-        return marker in response_body
+        return _contains_marker_in_string(response_body)
 
     if isinstance(response_body, Mapping):
         def _contains_marker(value: object) -> bool:
             if isinstance(value, str):
-                return marker in value
+                return _contains_marker_in_string(value)
             if isinstance(value, Mapping):
                 return any(_contains_marker(inner) for inner in value.values())
             if isinstance(value, SequenceCollection) and not isinstance(
